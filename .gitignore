@@ -1,0 +1,4 @@
+/.vagga
+/target
+/tmp
+Cargo.lock

@@ -1,0 +1,36 @@
+commands:
+
+  make: !Command
+    description: Build the library and CLI
+    container: ubuntu
+    run: [cargo, build]
+
+  cargo: !Command
+    description: Run arbitrary cargo command
+    symlink-name: cargo
+    container: ubuntu
+    run: [cargo]
+
+  test: !Command
+    description: Run tests
+    container: ubuntu
+    run: [cargo, test]
+
+containers:
+
+  ubuntu:
+    setup:
+    - !Ubuntu focal
+    - !Install [ca-certificates, git, build-essential, vim]
+
+    - !TarInstall
+      url: "https://static.rust-lang.org/dist/rust-1.56.0-x86_64-unknown-linux-gnu.tar.gz"
+      script: "./install.sh --prefix=/usr \
+                --components=rustc,rust-std-x86_64-unknown-linux-gnu,cargo"
+    - !TarInstall
+      url: "https://static.rust-lang.org/dist/rust-std-1.56.0-wasm32-unknown-unknown.tar.gz"
+      script: "./install.sh --prefix=/usr --components=rust-std-wasm32-unknown-unknown"
+
+    environ:
+      HOME: /work/target
+      RUST_BACKTRACE: 1

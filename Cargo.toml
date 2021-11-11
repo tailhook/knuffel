@@ -1,0 +1,18 @@
+[package]
+name = "knuffel"
+version = "0.1.0"
+edition = "2021"
+description = """
+    Another KDL language implementation
+"""
+license = "MIT/Apache-2.0"
+keywords = ["kdl", "configuration"]
+homepage = "https://github.com/tailhook/knuddle"
+documentation = "https://docs.rs/knuddle"
+
+[dependencies]
+knuffel-derive = {path="./derive", optional=true}
+
+[features]
+default = ["derive"]
+derive = ["knuffel-derive"]
