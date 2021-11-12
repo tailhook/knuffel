@@ -7,8 +7,8 @@ description = """
 """
 license = "MIT/Apache-2.0"
 keywords = ["kdl", "configuration"]
-homepage = "https://github.com/tailhook/knuddle"
-documentation = "https://docs.rs/knuddle"
+homepage = "https://github.com/tailhook/knuffel"
+documentation = "https://docs.rs/knuffel"
 
 [dependencies]
 combine = "4.6.2"
