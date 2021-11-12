@@ -11,8 +11,10 @@ homepage = "https://github.com/tailhook/knuddle"
 documentation = "https://docs.rs/knuddle"
 
 [dependencies]
+combine = "4.6.2"
 knuffel-derive = {path="./derive", optional=true}
 
 [features]
-default = ["derive"]
+default = ["derive", "std"]
+std = ["combine/std"]
 derive = ["knuffel-derive"]
