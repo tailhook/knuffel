@@ -1,10 +1,12 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::span::Spanned;
 
+
 /// Single node of the KDL document
 pub struct Node<S> {
-    type_name: Option<Spanned<String, S>>,
+    type_name: Option<Spanned<Cow<'static, str>, S>>,
     node_name: Spanned<String, S>,
     arguments: Vec<Spanned<Value, S>>,
     properties: BTreeSet<Property<S>>,

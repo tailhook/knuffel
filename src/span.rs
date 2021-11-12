@@ -8,10 +8,10 @@ pub(crate) struct Spanned<T, S> {
 }
 
 /// Span used for single-file configs
-pub struct Span(usize);
+pub struct Span(usize, usize);
 
 /// Span used for configs that are split across different files
-pub struct FileSpan(Arc<PathBuf>, usize);
+pub struct FileSpan(Arc<PathBuf>, Span);
 
 
 impl<T, S> std::ops::Deref for Spanned<T, S> {
