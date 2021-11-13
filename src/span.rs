@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Keeps object's boundary positions in the original file
+#[derive(Clone, Debug)]
 pub struct Spanned<T, S> {
     span: S,
     value: T,

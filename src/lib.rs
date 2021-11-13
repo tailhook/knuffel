@@ -1,4 +1,4 @@
-mod lexer;
+mod grammar;
 
 pub mod ast;
 pub mod span;
