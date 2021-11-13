@@ -1,20 +1,27 @@
+use std::collections::BTreeMap;
+
 use combine::error::StreamError;
-use combine::stream::StreamErrorFor;
-use combine::stream::state;
 use combine::parser::combinator::recognize;
 use combine::parser::repeat::escaped;
+use combine::stream::state;
+use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
 use combine::{eof, optional, count_min_max, between, position};
 use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
 
-use crate::ast::{Literal, TypeName};
+use crate::ast::{Literal, TypeName, Node};
 use crate::span::{Spanned, SpanContext};
 
-pub struct SpanParser<P>(P);
+struct SpanParser<P>(P);
 
-pub struct SpanState<'a, S> {
+pub struct SpanState<'a, S: SpanContext<usize>> {
     span_context: S,
     data: &'a str,
+}
+
+trait SpanStream: Stream {
+    type Span;
+    fn span_from(&self, start: Self::Position) -> Self::Span;
 }
 
 fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
@@ -132,26 +139,44 @@ fn type_name<I: Stream<Token=char>>() -> impl Parser<I, Output=TypeName> {
     token('(').with(ident()).skip(token(')')).map(TypeName::from_string)
 }
 
-
-impl<'a, I, S, P> Parser<state::Stream<I, SpanState<'a, S>>> for SpanParser<P>
-    where P: Parser<state::Stream<I, SpanState<'a, S>>>,
-          S: SpanContext<usize>,
-          I: Stream<Position=combine::stream::PointerOffset<str>>,
+fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
+    where I: SpanStream<Token=char>,
 {
-    type Output = Spanned<P::Output, S::Span>;
+    combine::struct_parser! {
+        Node {
+            type_name: optional(SpanParser(type_name())),
+            node_name: SpanParser(ident()),
+            arguments: combine::produce(Vec::new),
+            properties: combine::produce(BTreeMap::new),
+            children: combine::produce(|| None),
+        }
+    }
+}
+
+impl<'a, I, S> SpanStream for state::Stream<I, SpanState<'a, S>>
+    where I: Stream<Position=PointerOffset<str>>,
+          S: SpanContext<usize>,
+{
+    type Span = S::Span;
+    fn span_from(&self, start: Self::Position) -> Self::Span {
+        let start = start.translate_position(self.state.data);
+        let end = self.stream.position().translate_position(self.state.data);
+        return self.state.span_context.from_positions(start, end);
+    }
+}
+
+impl<P: Parser<I>, I: SpanStream> Parser<I> for SpanParser<P> {
+    type Output = Spanned<P::Output, I::Span>;
     type PartialState = ();
 
     #[inline]
-    fn parse_lazy(&mut self, input: &mut state::Stream<I, SpanState<'a, S>>)
+    fn parse_lazy(&mut self, input: &mut I)
         -> combine::ParseResult<Self::Output, I::Error>
     {
-        let start = input.stream.position();
+        let start = input.position();
         self.0.parse_lazy(input)
             .map(|value| {
-                let end = input.stream.position();
-                let start = start.translate_position(input.state.data);
-                let end = end.translate_position(input.state.data);
-                let span = input.state.span_context.from_positions(start, end);
+                let span = input.span_from(start);
                 Spanned { span, value }
             })
     }
@@ -169,7 +194,7 @@ mod test {
     use crate::span::{Span, SimpleContext};
     use crate::ast::{Literal, TypeName};
 
-    use super::{ws, string, ident, type_name};
+    use super::{ws, string, ident, type_name, node};
     use super::{SpanParser, SpanState};
 
 
@@ -267,4 +292,14 @@ mod test {
         parse(type_name(), "(abc )").unwrap_err();
     }
 
+    #[test]
+    fn parse_node() {
+        let nval = parse(node(), "hello").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = parse(node(), "(typ)other").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "other");
+        assert_eq!(nval.type_name.as_ref().map(|x| &***x), Some("typ"));
+    }
 }
