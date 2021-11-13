@@ -1,12 +1,16 @@
 use combine::error::StreamError;
 use combine::stream::StreamErrorFor;
+use combine::stream::state;
 use combine::parser::combinator::recognize;
 use combine::parser::repeat::escaped;
 use combine::{Stream, Parser};
-use combine::{eof, optional, count_min_max, between};
+use combine::{eof, optional, count_min_max, between, position};
 use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
 
 use crate::ast::{Literal};
+use crate::span::{Spanned, SpanContext};
+
+pub struct SpanParser<P>(P);
 
 fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     satisfy(|c| matches!(c,
@@ -82,26 +86,64 @@ fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     .map(|val: String| Literal::String(val.into()))
 }
 
+pub struct SpanState<'a, S> {
+    span_context: S,
+    data: &'a str,
+}
+
+impl<'a, I, S, P> Parser<state::Stream<I, SpanState<'a, S>>> for SpanParser<P>
+    where P: Parser<state::Stream<I, SpanState<'a, S>>>,
+          S: SpanContext<usize>,
+          I: Stream<Position=combine::stream::PointerOffset<str>>,
+{
+    type Output = Spanned<P::Output, S::Span>;
+    type PartialState = ();
+
+    #[inline]
+    fn parse_lazy(&mut self, input: &mut state::Stream<I, SpanState<'a, S>>)
+        -> combine::ParseResult<Self::Output, I::Error>
+    {
+        let start = input.stream.position();
+        self.0.parse_lazy(input)
+            .map(|value| {
+                let end = input.stream.position();
+                let start = start.translate_position(input.state.data);
+                let end = end.translate_position(input.state.data);
+                let span = input.state.span_context.from_positions(start, end);
+                Spanned { span, value }
+            })
+    }
+}
+
 #[cfg(test)]
 mod test {
 
     use combine::eof;
     use combine::error::StringStreamError;
     use combine::{Parser};
-    use combine::stream::PointerOffset;
+    use combine::stream::{state, PointerOffset};
     use combine::easy::{Stream, Errors};
 
+    use crate::span::{Span, SimpleContext};
     use crate::ast::Literal;
 
-    use super::{ws, string};
+    use super::{ws, string, SpanParser, SpanState};
 
 
-    fn parse<'x, P: Parser<Stream<&'x str>>>(p: P, text: &'x str)
+    fn parse<'x, P>(p: P, text: &'x str)
         -> Result<P::Output, Errors<char, &str, usize>>
+        where P: Parser<state::Stream<Stream<&'x str>,
+                                      SpanState<'x, SimpleContext>>>
     {
-        p.skip(eof()).parse(Stream(text))
+        p.skip(eof()).parse(state::Stream {
+            stream: Stream(text),
+            state: SpanState {
+                span_context: SimpleContext,
+                data: text,
+            },
+        })
         .map(|(val, input)| {
-            assert_eq!(input.0, "");
+            assert_eq!(input.stream.0, "");
             val
         })
         .map_err(|e| e.map_position(|p| p.translate_position(text)))
@@ -129,6 +171,14 @@ mod test {
         let err = parse(string(), r#""hello"#).unwrap_err();
         println!("{}", err);
         assert!(err.to_string().contains("Expected `\"`"));
+    }
+
+    #[test]
+    fn parse_spanned() {
+        let val = parse(ws().with(SpanParser(string())), r#"   "hello""#)
+            .unwrap();
+        assert_eq!(*val, Literal::String("hello".into()));
+        assert_eq!(val.span(), &Span(3, 10));
     }
 
 }

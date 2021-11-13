@@ -1,19 +1,48 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use combine::stream::{StreamOnce};
+
 /// Keeps object's boundary positions in the original file
 #[derive(Clone, Debug)]
 pub struct Spanned<T, S> {
-    span: S,
-    value: T,
+    pub(crate) span: S,
+    pub(crate) value: T,
 }
 
 /// Span used for single-file configs
-pub struct Span(usize, usize);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span(pub usize, pub usize);
 
 /// Span used for configs that are split across different files
-pub struct FileSpan(Arc<PathBuf>, Span);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileSpan(pub Arc<PathBuf>, pub Span);
 
+/// Adds custom span type ot the abstract syntax tree (AST) nodes
+pub trait SpanContext<P> {
+    type Span;
+    fn from_positions(&self, start: P, end: P) -> Self::Span;
+}
+
+pub(crate) struct SimpleContext;
+
+pub(crate) struct FileContext {
+    file_path: Arc<PathBuf>,
+}
+
+impl SpanContext<usize> for SimpleContext {
+    type Span = Span;
+    fn from_positions(&self, start: usize, end: usize) -> Self::Span {
+        Span(start, end)
+    }
+}
+
+impl SpanContext<usize> for FileContext {
+    type Span = FileSpan;
+    fn from_positions(&self, start: usize, end: usize) -> Self::Span {
+        FileSpan(self.file_path.clone(), Span(start, end))
+    }
+}
 
 impl<T, S> std::ops::Deref for Spanned<T, S> {
     type Target = T;
