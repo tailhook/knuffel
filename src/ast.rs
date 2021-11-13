@@ -37,7 +37,13 @@ pub struct Value<S> {
 
 /// Type identifier
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeName(Option<BuiltinType>, Cow<'static, str>);
+pub struct TypeName(TypeNameInner);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypeNameInner {
+    Builtin(BuiltinType),
+    Custom(Box<str>),
+}
 
 /// Known type identifier described by specification
 #[non_exhaustive]
@@ -64,6 +70,33 @@ impl<S> Node<S> {
     /// Returns node children
     pub fn children(&self) -> impl Iterator<Item=&Spanned<Node<S>, S>> {
         self.children.iter().flat_map(|c| c.iter())
+    }
+}
+
+impl BuiltinType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl TypeName {
+    // TODO(tailhook) for public API check is_ident too
+    pub(crate) fn from_string(val: Box<str>) -> TypeName {
+        match &val[..] {
+            _ => TypeName(TypeNameInner::Custom(val)),
+        }
+    }
+}
+
+impl std::ops::Deref for TypeName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match &self.0 {
+            TypeNameInner::Builtin(t) => t.as_str(),
+            TypeNameInner::Custom(t) => t.as_ref(),
+        }
     }
 }
 

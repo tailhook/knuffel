@@ -12,6 +12,11 @@ use crate::span::{Spanned, SpanContext};
 
 pub struct SpanParser<P>(P);
 
+pub struct SpanState<'a, S> {
+    span_context: S,
+    data: &'a str,
+}
+
 fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     satisfy(|c| matches!(c,
         '\t' | ' ' | '\u{00a0}' | '\u{1680}' |
@@ -19,6 +24,33 @@ fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
         '\u{202F}' | '\u{205F}' | '\u{3000}'
     ))
     .map(|_| ())
+}
+
+fn first_id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
+    satisfy(|c| !matches!(c,
+        '0'..='9' |
+        '\u{0000}'..='\u{0020}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
+}
+
+fn id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
+    satisfy(|c| !matches!(c,
+        '\u{0000}'..='\u{0021}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
 }
 
 fn newline<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
@@ -88,10 +120,14 @@ fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     .map(|val: String| Literal::String(val.into()))
 }
 
-pub struct SpanState<'a, S> {
-    span_context: S,
-    data: &'a str,
+fn ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+    first_id_char().and(many(id_char()))
+        .map(|(first, mut ident): (_, String)| {
+            ident.insert(0, first);
+            ident.into()
+        })
 }
+
 
 impl<'a, I, S, P> Parser<state::Stream<I, SpanState<'a, S>>> for SpanParser<P>
     where P: Parser<state::Stream<I, SpanState<'a, S>>>,
@@ -129,7 +165,7 @@ mod test {
     use crate::span::{Span, SimpleContext};
     use crate::ast::Literal;
 
-    use super::{ws, string, SpanParser, SpanState};
+    use super::{ws, string, ident, SpanParser, SpanState};
 
 
     fn parse<'x, P>(p: P, text: &'x str)
@@ -204,6 +240,15 @@ mod test {
             .unwrap();
         assert_eq!(*val, Literal::String("hello".into()));
         assert_eq!(val.span(), &Span(3, 10));
+    }
+
+    #[test]
+    fn parse_ident() {
+        assert_eq!(&*parse(ident(), "abcdef").unwrap(), "abcdef");
+        assert_eq!(&*parse(ident(), "xx_cd$yy").unwrap(), "xx_cd$yy");
+        assert_eq!(&*parse(ident().skip(ws()), "adef   ").unwrap(), "adef");
+        assert_eq!(&*parse(ident().skip(ws()), "a123@   ").unwrap(), "a123@");
+        parse(ident(), "1abc").unwrap_err();
     }
 
 }
