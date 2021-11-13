@@ -82,7 +82,7 @@ impl BuiltinType {
 }
 
 impl TypeName {
-    // TODO(tailhook) for public API check is_ident too
+    // TODO(tailhook) for public API check identifier for validness
     pub(crate) fn from_string(val: Box<str>) -> TypeName {
         match &val[..] {
             _ => TypeName(TypeNameInner::Custom(val)),

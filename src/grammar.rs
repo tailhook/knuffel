@@ -7,7 +7,7 @@ use combine::{Stream, Parser};
 use combine::{eof, optional, count_min_max, between, position};
 use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
 
-use crate::ast::{Literal};
+use crate::ast::{Literal, TypeName};
 use crate::span::{Spanned, SpanContext};
 
 pub struct SpanParser<P>(P);
@@ -128,6 +128,10 @@ fn ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
         })
 }
 
+fn type_name<I: Stream<Token=char>>() -> impl Parser<I, Output=TypeName> {
+    token('(').with(ident()).skip(token(')')).map(TypeName::from_string)
+}
+
 
 impl<'a, I, S, P> Parser<state::Stream<I, SpanState<'a, S>>> for SpanParser<P>
     where P: Parser<state::Stream<I, SpanState<'a, S>>>,
@@ -163,9 +167,10 @@ mod test {
     use combine::easy::{Stream, Errors};
 
     use crate::span::{Span, SimpleContext};
-    use crate::ast::Literal;
+    use crate::ast::{Literal, TypeName};
 
-    use super::{ws, string, ident, SpanParser, SpanState};
+    use super::{ws, string, ident, type_name};
+    use super::{SpanParser, SpanState};
 
 
     fn parse<'x, P>(p: P, text: &'x str)
@@ -249,6 +254,17 @@ mod test {
         assert_eq!(&*parse(ident().skip(ws()), "adef   ").unwrap(), "adef");
         assert_eq!(&*parse(ident().skip(ws()), "a123@   ").unwrap(), "a123@");
         parse(ident(), "1abc").unwrap_err();
+    }
+
+    #[test]
+    fn parse_type() {
+        assert_eq!(parse(type_name(), "(abcdef)").unwrap(),
+                   TypeName::from_string("abcdef".into()));
+        assert_eq!(parse(type_name(), "(xx_cd$yy)").unwrap(),
+                   TypeName::from_string("xx_cd$yy".into()));
+        parse(type_name(), "(1abc)").unwrap_err();
+        parse(type_name(), "( abc)").unwrap_err();
+        parse(type_name(), "(abc )").unwrap_err();
     }
 
 }
