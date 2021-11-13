@@ -63,17 +63,19 @@ fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
         'n' => Some('\n'),
         'r' => Some('\r'),
         't' => Some('\t'),
-        'u' => todo!(),
         _ => None,
-    })
+    }).message("invalid escape char")
     .or(token('u').and(token('{')).with(
-        count_min_max(1, 6, satisfy_map(|x: char| x.to_digit(16))),
-    ).skip(token('}')).and_then(|code: UniEscape| {
-        code.0.try_into().map_err(|_| {
-            StreamErrorFor::<I>::unexpected_static_message(
-                "unicode escape out of range")
-        })
-    }))
+        count_min_max(1, 6, satisfy_map(|x: char| x.to_digit(16))))
+        .skip(
+            token('}').message("unicode escape should contain \
+                               1 to 6 hexadecimal chars"))
+        .and_then(|code: UniEscape| {
+            code.0.try_into().map_err(|_| {
+                StreamErrorFor::<I>::unexpected_static_message(
+                    "unicode escape out of range")
+            })
+        }))
 }
 
 
@@ -164,6 +166,12 @@ mod test {
             Literal::String("hello".into()));
         assert_eq!(parse(string(), r#""""#).unwrap(),
             Literal::String("".into()));
+        assert_eq!(parse(string(), r#""hel\"lo""#).unwrap(),
+            Literal::String("hel\"lo".into()));
+        assert_eq!(parse(string(), r#""hello\nworld!""#).unwrap(),
+            Literal::String("hello\nworld!".into()));
+        assert_eq!(parse(string(), r#""\u{1F680}""#).unwrap(),
+            Literal::String("🚀".into()));
     }
 
     #[test]
@@ -171,6 +179,23 @@ mod test {
         let err = parse(string(), r#""hello"#).unwrap_err();
         println!("{}", err);
         assert!(err.to_string().contains("Expected `\"`"));
+
+        let err = parse(string(), r#""he\u{FFFFFF}llo""#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("unicode escape out of range"));
+
+        let err = parse(string(), r#""he\u{1234567}llo""#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("unicode escape"));
+
+        let err = parse(string(), r#""he\u{1gh}llo""#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("hexadecimal"));
+
+        let err = parse(string(), r#""he\x01llo""#).unwrap_err();
+        println!("{}", err);
+        assert_eq!(err.position, 4);
+        assert!(err.to_string().contains("invalid escape char"));
     }
 
     #[test]
