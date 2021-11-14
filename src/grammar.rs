@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use combine::error::StreamError;
 use combine::parser::combinator::{recognize, no_partial};
-use combine::parser::repeat::{repeat_skip_until};
+use combine::parser::repeat::{repeat_skip_until, repeat_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
 use combine::{eof, optional, count_min_max, between, position, any, choice};
-use combine::{opaque, attempt};
+use combine::{opaque, attempt, sep_end_by1};
 use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
 
 use crate::ast::{Literal, TypeName, Node};
@@ -95,9 +95,7 @@ fn ml_comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
 }
 
 fn ws<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    // Wrap the `spaces().or(comment)` in `skip_many` so that it skips
-    // alternating whitespace and comments
-    skip_many(skip_many1(ws_char()).or(ml_comment()))
+    skip_many1(ws_char()).or(ml_comment())
 }
 
 fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
@@ -161,6 +159,10 @@ fn esc_line<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     (token('\\'), skip_many(ws()), comment().or(newline())).map(|_| ())
 }
 
+fn line_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    newline().or(ws()).or(comment())
+}
+
 fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     ws().or(esc_line()).map(|_| ())
 }
@@ -174,8 +176,15 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
             node_name: SpanParser(ident()),
             arguments: combine::produce(Vec::new),
             properties: combine::produce(BTreeMap::new),
-            _: node_space(),
-            children: combine::produce(|| None),
+            _: skip_many(node_space()),
+            children: optional(SpanParser(between(
+                token('{').and(skip_many(line_space())),
+                token('}'),
+                repeat_until(
+                    opaque!(no_partial(SpanParser(node())))
+                        .skip(skip_many(line_space())),
+                    token('}')),
+            ))),
         }
     }
 }
@@ -365,5 +374,19 @@ mod test {
         let nval = parse(node(), "(typ)other").unwrap();
         assert_eq!(nval.node_name.as_ref(), "other");
         assert_eq!(nval.type_name.as_ref().map(|x| &***x), Some("typ"));
+
+        let nval = parse(node(), "parent {\nchild\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child");
+
+        let nval = parse(node(), "parent {\nchild1\nchild2\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 2);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child1");
+        assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
+                   "child2");
     }
 }
