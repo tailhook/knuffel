@@ -67,6 +67,7 @@ fn newline<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     .or(satisfy(|c| matches!(c,
         '\n' | '\u{0085}' | '\u{000C}' | '\u{2028}' | '\u{2029}'))
         .map(|_| ()))
+    .silent().expected("newline")
 }
 
 fn not_nl_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
@@ -78,12 +79,13 @@ fn not_nl_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
 fn comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     (attempt((token('/'), token('/'))),
         skip_many(not_nl_char()), newline().or(eof()))
+    .silent()
     .map(|_| ())
 }
 
 fn ml_comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     (
-        attempt((token('/'), token('*')).expected("/*")),
+        attempt((token('/'), token('*')).silent()),
         opaque!(no_partial(
             repeat_skip_until(
                 ml_comment().or(any().map(|_| ())),
@@ -95,7 +97,7 @@ fn ml_comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
 }
 
 fn ws<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    skip_many1(ws_char()).or(ml_comment())
+    skip_many1(ws_char().silent()).or(ml_comment())
 }
 
 fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
@@ -160,11 +162,11 @@ fn esc_line<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
 }
 
 fn line_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    newline().or(ws()).or(comment())
+    newline().or(ws()).or(comment()).silent()
 }
 
 fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    ws().or(esc_line()).map(|_| ())
+    ws().or(esc_line()).map(|_| ()).silent()
 }
 
 fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
@@ -179,11 +181,11 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
             _: skip_many(node_space()),
             children: optional(SpanParser(between(
                 token('{').and(skip_many(line_space())),
-                token('}'),
+                token('}').message("unclosed block"),
                 repeat_until(
                     opaque!(no_partial(SpanParser(node())))
                         .skip(skip_many(line_space())),
-                    token('}')),
+                    token('}').map(|_| ()).or(eof())),
             ))),
         }
     }
@@ -274,23 +276,26 @@ mod test {
 
     #[test]
     fn parse_comment_err() {
-        let err = parse(ml_comment(), r#"/* comment *"#).unwrap_err();
+        let err = parse(ws(), r#"/* comment *"#).unwrap_err();
         println!("{}", err);
+        assert!(err.to_string().contains("Expected `*/`"));
         assert!(err.to_string().contains("unclosed comment"));
 
-        let err = parse(ml_comment(), r#"/* comment"#).unwrap_err();
+        let err = parse(ws(), r#"/* comment"#).unwrap_err();
         println!("{}", err);
+        assert!(err.to_string().contains("Expected `*/`"));
         assert!(err.to_string().contains("unclosed comment"));
 
-        let err = parse(ml_comment(), r#"/*/"#).unwrap_err();
+        let err = parse(ws(), r#"/*/"#).unwrap_err();
         println!("{}", err);
+        assert!(err.to_string().contains("Expected `*/`"));
         assert!(err.to_string().contains("unclosed comment"));
 
-        let err = parse(ml_comment(), r#"xxx"#).unwrap_err();
+        let err = parse(ws(), r#"xxx"#).unwrap_err();
         println!("{}", err);
-        assert!(err.to_string().contains("Expected `/*`"));
-        assert!(!err.to_string().contains("unclosed comment"));
-        assert!(!err.to_string().contains("Expected `*/`"));
+        // nothing is expected for comment or whitespace
+        assert!(!err.to_string().contains("Expected"));
+        assert!(err.to_string().contains("Unexpected `x`"));
     }
 
     #[test]
@@ -388,5 +393,14 @@ mod test {
                    "child1");
         assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
                    "child2");
+    }
+
+    #[test]
+    fn parse_node_err() {
+        let err = parse(node(), "hello{").unwrap_err();
+        println!("{}", err);
+        println!("{:?}", err);
+        assert!(err.to_string().contains("Expected `}`"));
+        assert!(err.to_string().contains("unclosed block"));
     }
 }
