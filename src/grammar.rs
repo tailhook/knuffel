@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
 use combine::error::StreamError;
-use combine::parser::combinator::recognize;
-use combine::parser::repeat::escaped;
+use combine::parser::combinator::{recognize, no_partial};
+use combine::parser::repeat::{repeat_skip_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
-use combine::{eof, optional, count_min_max, between, position};
+use combine::{eof, optional, count_min_max, between, position, any, choice};
+use combine::{opaque, attempt};
 use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
 
 use crate::ast::{Literal, TypeName, Node};
@@ -28,7 +29,8 @@ fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     satisfy(|c| matches!(c,
         '\t' | ' ' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200A}' |
-        '\u{202F}' | '\u{205F}' | '\u{3000}'
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        '\u{FEFF}'
     ))
     .map(|_| ())
 }
@@ -73,13 +75,29 @@ fn not_nl_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     .map(|_| ())
 }
 
+fn comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    (attempt((token('/'), token('/'))),
+        skip_many(not_nl_char()), newline().or(eof()))
+    .map(|_| ())
+}
+
+fn ml_comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    (
+        attempt((token('/'), token('*')).expected("/*")),
+        opaque!(no_partial(
+            repeat_skip_until(
+                ml_comment().or(any().map(|_| ())),
+                attempt((token('*'), token('/'))).map(|_| ()).or(eof()),
+            )
+        )),
+        (token('*'), token('/')).expected("*/").message("unclosed comment"),
+    ).map(|_| ())
+}
+
 fn ws<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    let comment =
-        (token('/'), token('/'), skip_many(not_nl_char()), newline().or(eof()))
-        .map(|_| ());
-    // Wrap the `spaces().or(comment)` in `skip_many` so that it skips alternating whitespace and
-    // comments
-    skip_many(skip_many1(ws_char()).or(comment))
+    // Wrap the `spaces().or(comment)` in `skip_many` so that it skips
+    // alternating whitespace and comments
+    skip_many(skip_many1(ws_char()).or(ml_comment()))
 }
 
 fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
@@ -119,7 +137,7 @@ fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
 
 
 fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
-    between(token('"'), token('"'), many(
+    between(token('"'), token('"').message("unclosed quoted string"), many(
         satisfy(|c| c != '"' && c != '\\')
         .or(token('\\').with(esc_value()))
         .silent()  // expose only unexpected '"'
@@ -139,6 +157,14 @@ fn type_name<I: Stream<Token=char>>() -> impl Parser<I, Output=TypeName> {
     token('(').with(ident()).skip(token(')')).map(TypeName::from_string)
 }
 
+fn esc_line<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    (token('\\'), skip_many(ws()), comment().or(newline())).map(|_| ())
+}
+
+fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    ws().or(esc_line()).map(|_| ())
+}
+
 fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
     where I: SpanStream<Token=char>,
 {
@@ -148,6 +174,7 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
             node_name: SpanParser(ident()),
             arguments: combine::produce(Vec::new),
             properties: combine::produce(BTreeMap::new),
+            _: node_space(),
             children: combine::produce(|| None),
         }
     }
@@ -194,7 +221,7 @@ mod test {
     use crate::span::{Span, SimpleContext};
     use crate::ast::{Literal, TypeName};
 
-    use super::{ws, string, ident, type_name, node};
+    use super::{ws, comment, ml_comment, string, ident, type_name, node};
     use super::{SpanParser, SpanState};
 
 
@@ -220,10 +247,41 @@ mod test {
     #[test]
     fn parse_ws() {
         parse(ws(), "   ").unwrap();
-        parse(ws(), "//hello").unwrap();
-        parse(ws(), "   // hello").unwrap();
-        parse(ws(), "   // hello\n   //world").unwrap();
         parse(ws(), "text").unwrap_err();
+    }
+
+    #[test]
+    fn parse_comments() {
+        parse(comment(), "//hello").unwrap();
+        parse(ml_comment(), "/*nothing*/").unwrap();
+        parse(ml_comment(), "/*nothing**/").unwrap();
+        parse(ml_comment(), "/*no*thing*/").unwrap();
+        parse(ml_comment(), "/*no/**/thing*/").unwrap();
+        parse(ml_comment(), "/*no/*/**/*/thing*/").unwrap();
+        parse((ws(), comment()), "   // hello").unwrap();
+        parse((ws(), comment(), ws(), comment()),
+              "   // hello\n   //world").unwrap();
+    }
+
+    #[test]
+    fn parse_comment_err() {
+        let err = parse(ml_comment(), r#"/* comment *"#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("unclosed comment"));
+
+        let err = parse(ml_comment(), r#"/* comment"#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("unclosed comment"));
+
+        let err = parse(ml_comment(), r#"/*/"#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("unclosed comment"));
+
+        let err = parse(ml_comment(), r#"xxx"#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("Expected `/*`"));
+        assert!(!err.to_string().contains("unclosed comment"));
+        assert!(!err.to_string().contains("Expected `*/`"));
     }
 
     #[test]
@@ -245,6 +303,7 @@ mod test {
         let err = parse(string(), r#""hello"#).unwrap_err();
         println!("{}", err);
         assert!(err.to_string().contains("Expected `\"`"));
+        assert!(err.to_string().contains("unclosed quoted string"));
 
         let err = parse(string(), r#""he\u{FFFFFF}llo""#).unwrap_err();
         println!("{}", err);
@@ -262,6 +321,11 @@ mod test {
         println!("{}", err);
         assert_eq!(err.position, 4);
         assert!(err.to_string().contains("invalid escape char"));
+
+        let err = parse(string(), r#"xxx"#).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("Expected `\"`"));
+        assert!(!err.to_string().contains("unclosed quoted string"));
     }
 
     #[test]
