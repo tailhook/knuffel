@@ -35,7 +35,21 @@ fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     .map(|_| ())
 }
 
-fn first_id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
+fn id_sans_sign_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
+    satisfy(|c| !matches!(c,
+        '-'| '+' | '0'..='9' |
+        '\u{0000}'..='\u{0020}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
+}
+
+fn id_sans_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
     satisfy(|c| !matches!(c,
         '0'..='9' |
         '\u{0000}'..='\u{0020}' |
@@ -136,21 +150,25 @@ fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
 }
 
 
-fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     between(token('"'), token('"').message("unclosed quoted string"), many(
         satisfy(|c| c != '"' && c != '\\')
         .or(token('\\').with(esc_value()))
         .silent()  // expose only unexpected '"'
     ))
-    .map(|val: String| Literal::String(val.into()))
+    .map(|val: String| val.into())
+}
+
+fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+    let sign = token('+').or(token('-'));
+    recognize(choice((
+        (sign, id_sans_dig(), skip_many(id_char())).map(|_| ()),
+        (id_sans_sign_dig(), skip_many(id_char())).map(|_| ()),
+    ))).map(|s: String| s.into()).silent().expected("identifier")
 }
 
 fn ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
-    first_id_char().and(many(id_char()))
-        .map(|(first, mut ident): (_, String)| {
-            ident.insert(0, first);
-            ident.into()
-        })
+    choice((bare_ident(), string()))
 }
 
 fn type_name<I: Stream<Token=char>>() -> impl Parser<I, Output=TypeName> {
@@ -300,16 +318,12 @@ mod test {
 
     #[test]
     fn parse_str() {
-        assert_eq!(parse(string(), r#""hello""#).unwrap(),
-            Literal::String("hello".into()));
-        assert_eq!(parse(string(), r#""""#).unwrap(),
-            Literal::String("".into()));
-        assert_eq!(parse(string(), r#""hel\"lo""#).unwrap(),
-            Literal::String("hel\"lo".into()));
-        assert_eq!(parse(string(), r#""hello\nworld!""#).unwrap(),
-            Literal::String("hello\nworld!".into()));
-        assert_eq!(parse(string(), r#""\u{1F680}""#).unwrap(),
-            Literal::String("🚀".into()));
+        assert_eq!(&*parse(string(), r#""hello""#).unwrap(), "hello");
+        assert_eq!(&*parse(string(), r#""""#).unwrap(), "");
+        assert_eq!(&*parse(string(), r#""hel\"lo""#).unwrap(),"hel\"lo");
+        assert_eq!(&*parse(string(), r#""hello\nworld!""#).unwrap(),
+                   "hello\nworld!");
+        assert_eq!(&*parse(string(), r#""\u{1F680}""#).unwrap(), "🚀");
     }
 
     #[test]
@@ -346,7 +360,7 @@ mod test {
     fn parse_spanned() {
         let val = parse(ws().with(SpanParser(string())), r#"   "hello""#)
             .unwrap();
-        assert_eq!(*val, Literal::String("hello".into()));
+        assert_eq!(*val, "hello".into());
         assert_eq!(val.span(), &Span(3, 10));
     }
 
@@ -376,9 +390,18 @@ mod test {
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
 
+        let nval = parse(node(), "\"123\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "123");
+        assert_eq!(nval.type_name.as_ref(), None);
+
         let nval = parse(node(), "(typ)other").unwrap();
         assert_eq!(nval.node_name.as_ref(), "other");
         assert_eq!(nval.type_name.as_ref().map(|x| &***x), Some("typ"));
+
+        let nval = parse(node(), "(\"std::duration\")\"timeout\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "timeout");
+        assert_eq!(nval.type_name.as_ref().map(|x| &***x),
+                   Some("std::duration"));
 
         let nval = parse(node(), "parent {\nchild\n}").unwrap();
         assert_eq!(nval.node_name.as_ref(), "parent");
