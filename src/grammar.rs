@@ -7,7 +7,7 @@ use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
 use combine::{eof, optional, count_min_max, between, position, any, choice};
-use combine::{opaque, attempt, sep_end_by1};
+use combine::{opaque, attempt, sep_end_by1, unexpected_any, unexpected};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map};
 
 use crate::ast::{Literal, TypeName, Node, Value};
@@ -153,7 +153,7 @@ fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
                                1 to 6 hexadecimal chars"))
         .and_then(|code: UniEscape| {
             code.0.try_into().map_err(|_| {
-                StreamErrorFor::<I>::unexpected_static_message(
+                StreamErrorFor::<I>::message_static_message(
                     "unicode escape out of range")
             })
         }))
@@ -171,10 +171,17 @@ fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
 
 fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     let sign = token('+').or(token('-'));
-    recognize(choice((
+    attempt(recognize(choice((
         (sign, id_sans_dig(), skip_many(id_char())).map(|_| ()),
         (id_sans_sign_dig(), skip_many(id_char())).map(|_| ()),
-    ))).map(|s: String| s.into()).silent().expected("identifier")
+    ))).and_then(|s: String| {
+        match &s[..] {
+            "true" => Err(StreamErrorFor::<I>::unexpected("true")),
+            "false" => Err(StreamErrorFor::<I>::unexpected("false")),
+            "null" => Err(StreamErrorFor::<I>::unexpected("null")),
+            _ => Ok(s.into()),
+        }
+    }).silent().expected("identifier"))
 }
 
 fn ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
@@ -226,13 +233,41 @@ impl<S> Extend<PropOrArg<S>> for Node<S> {
     }
 }
 
+fn keyword<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+    use combine::parser::char::string as keyword;
+    choice((
+        keyword("null").map(|_| Literal::Null),
+        keyword("true").map(|_| Literal::Bool(true)),
+        keyword("false").map(|_| Literal::Bool(false)),
+    ))
+}
+
+fn literal<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+    choice((
+        string().map(Literal::String),
+        keyword(),
+        // TODO: number
+    ))
+}
+
+/// Untyped value without a string option, that is used to provide better
+/// errors when value=something is written
+fn arg_value<I>() -> impl Parser<I, Output=Value<I::Span>>
+    where I: SpanStream<Token=char>,
+{
+    SpanParser(choice((
+        keyword(),
+        // TODO: number
+    ))).map(|literal| Value { type_name: None, literal })
+}
+
 fn value<I>() -> impl Parser<I, Output=Value<I::Span>>
     where I: SpanStream<Token=char>,
 {
     combine::struct_parser!(
         Value {
             type_name: optional(SpanParser(type_name())),
-            literal: SpanParser(string().map(Literal::String)), // TODO
+            literal: SpanParser(literal()),
         }
     )
 }
@@ -243,7 +278,12 @@ fn prop_or_arg<I>() -> impl Parser<I, Output=PropOrArg<I::Span>>
     use PropOrArg::*;
 
     choice((
-        SpanParser(bare_ident()).skip(token('=')).and(value())
+        SpanParser(bare_ident())
+            .skip(token('=').message("bare identifiers cannot be used \
+                as arguments; use double-quotes, \
+                one of `true`, `false`, `null` or ensure it's a property by \
+                adding `=` and value."))
+            .and(value())
             .map(|(name, value)| Prop(name, value)),
         SpanParser(string()).and(optional(token('=').with(value())))
             .map(|(name, opt_value)| {
@@ -256,6 +296,14 @@ fn prop_or_arg<I>() -> impl Parser<I, Output=PropOrArg<I::Span>>
                     })
                 }
             }),
+        arg_value().map(Arg).skip(optional(
+            token('=').and_then(|_| -> Result<(), StreamErrorFor<I>> {
+                Err(StreamErrorFor::<I>::message_static_message(
+                    "numbers and keywords cannot be used as property names, \
+                    consider using double quotes"
+                ))
+            })
+        )),
         value().map(Arg),
     ))
 }
@@ -267,14 +315,19 @@ fn node_terminator<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
 fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
     where I: SpanStream<Token=char>,
 {
-    combine::struct_parser!(
-        Node {
-            type_name: optional(SpanParser(type_name())),
-            node_name: SpanParser(ident()),
-            properties: combine::produce(BTreeMap::new),
-            arguments: combine::produce(Vec::new),
-            children: combine::produce(|| None),
-        }
+    keyword().and_then(|_| Err(StreamErrorFor::<I>::message_static_message(
+        "keyword cannot be used as a node name, \
+         use double quotes or prepend the value with a node name"))
+    ).or(
+        combine::struct_parser!(
+            Node {
+                type_name: optional(SpanParser(type_name())),
+                node_name: SpanParser(ident()),
+                properties: combine::produce(BTreeMap::new),
+                arguments: combine::produce(Vec::new),
+                children: combine::produce(|| None),
+            }
+        )
     ).and(
         repeat_until(
             node_space().with(optional(prop_or_arg())),
@@ -333,6 +386,7 @@ mod test {
     use crate::ast::{Literal, TypeName};
 
     use super::{ws, comment, ml_comment, string, ident, type_name, node};
+    use super::{literal};
     use super::{SpanParser, SpanState};
 
 
@@ -456,6 +510,30 @@ mod test {
     }
 
     #[test]
+    fn parse_literal() {
+        assert_eq!(parse(literal(), "true").unwrap(), Literal::Bool(true));
+        assert_eq!(parse(literal(), "false").unwrap(), Literal::Bool(false));
+        assert_eq!(parse(literal(), "null").unwrap(), Literal::Null);
+    }
+
+    #[test]
+    fn exclude_keywords() {
+        parse(node(), "item true").unwrap();
+
+        let err = parse(node(), "true \"item\"").unwrap_err();
+        println!("{}", err);
+        println!("{:?}", err);
+        assert!(err.to_string().contains("cannot be used as a node name"));
+        assert!(!err.to_string().contains("Unexpected"));
+
+        let err = parse(node(), "item false=true").unwrap_err();
+        println!("{}", err);
+        println!("{:?}", err);
+        assert!(err.to_string().contains("cannot be used as property names"));
+        assert!(!err.to_string().contains("Unexpected"));
+    }
+
+    #[test]
     fn parse_type() {
         assert_eq!(parse(type_name(), "(abcdef)").unwrap(),
                    TypeName::from_string("abcdef".into()));
@@ -544,5 +622,15 @@ mod test {
         println!("{:?}", err);
         assert!(err.to_string().contains("Expected `}`"));
         assert!(err.to_string().contains("unclosed block"));
+
+        let err = parse(node(), "hello world").unwrap_err();
+        println!("{}", err);
+        println!("{:?}", err);
+        assert!(err.to_string().contains("cannot be used as argument"));
+
+        let err = parse(node(), "hello world {").unwrap_err();
+        println!("{}", err);
+        println!("{:?}", err);
+        assert!(err.to_string().contains("cannot be used as argument"));
     }
 }

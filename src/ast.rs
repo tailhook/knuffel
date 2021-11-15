@@ -63,7 +63,7 @@ pub enum Literal {
     /// String value
     String(Box<str>),
     /// Boolean value
-    Boolean(bool),
+    Bool(bool),
     /// Null value
     Null,
 }
