@@ -8,9 +8,10 @@ use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
 use combine::{eof, optional, count_min_max, between, position, any, choice};
 use combine::{opaque, attempt, sep_end_by1};
-use combine::{token, many, skip_many1, skip_many, satisfy, satisfy_map};
+use combine::{many, skip_many1, skip_many, satisfy, satisfy_map};
 
-use crate::ast::{Literal, TypeName, Node};
+use crate::ast::{Literal, TypeName, Node, Value};
+use crate::ast::{SpannedName, SpannedChildren};
 use crate::span::{Spanned, SpanContext};
 
 struct SpanParser<P>(P);
@@ -23,6 +24,15 @@ pub struct SpanState<'a, S: SpanContext<usize>> {
 trait SpanStream: Stream {
     type Span;
     fn span_from(&self, start: Self::Position) -> Self::Span;
+}
+
+enum PropOrArg<S> {
+    Prop(SpannedName<S>, Value<S>),
+    Arg(Value<S>),
+}
+
+fn token<I: Stream<Token=char>>(val: char) -> impl Parser<I, Output=()> {
+    combine::token(val).map(|_| ())
 }
 
 fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
@@ -77,7 +87,7 @@ fn id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
 }
 
 fn newline<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    (token('\r'), optional(token('\n'))).map(|_| ())
+    token('\r').skip(optional(token('\n')))
     .or(satisfy(|c| matches!(c,
         '\n' | '\u{0085}' | '\u{000C}' | '\u{2028}' | '\u{2029}'))
         .map(|_| ()))
@@ -187,26 +197,98 @@ fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     ws().or(esc_line()).map(|_| ()).silent()
 }
 
+fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
+    where I: SpanStream<Token=char>,
+{
+    SpanParser(between(
+        token('{').and(skip_many(line_space())),
+        token('}').message("unclosed block"),
+        repeat_until(
+            opaque!(no_partial(SpanParser(node())))
+                .skip(skip_many(line_space())),
+            token('}').or(eof())),
+    ))
+}
+
+impl<S> Extend<PropOrArg<S>> for Node<S> {
+    fn extend<I: IntoIterator<Item=PropOrArg<S>>>(&mut self, iter: I) {
+        use PropOrArg::*;
+        for item in iter {
+            match item {
+                Prop(key, val) => {
+                    self.properties.insert(key, val);
+                }
+                Arg(val) => {
+                    self.arguments.push(val);
+                }
+            }
+        }
+    }
+}
+
+fn value<I>() -> impl Parser<I, Output=Value<I::Span>>
+    where I: SpanStream<Token=char>,
+{
+    combine::struct_parser!(
+        Value {
+            type_name: optional(SpanParser(type_name())),
+            literal: SpanParser(string().map(Literal::String)), // TODO
+        }
+    )
+}
+
+fn prop_or_arg<I>() -> impl Parser<I, Output=PropOrArg<I::Span>>
+    where I: SpanStream<Token=char>,
+{
+    use PropOrArg::*;
+
+    choice((
+        SpanParser(bare_ident()).skip(token('=')).and(value())
+            .map(|(name, value)| Prop(name, value)),
+        SpanParser(string()).and(optional(token('=').with(value())))
+            .map(|(name, opt_value)| {
+                if let Some(value) = opt_value {
+                    Prop(name, value)
+                } else {
+                    Arg(Value {
+                        type_name: None,
+                        literal: name.map(Literal::String),
+                    })
+                }
+            }),
+        value().map(Arg),
+    ))
+}
+
+fn node_terminator<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
+    choice((newline(), comment(), token(';'), eof()))
+}
+
 fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
     where I: SpanStream<Token=char>,
 {
-    combine::struct_parser! {
+    combine::struct_parser!(
         Node {
             type_name: optional(SpanParser(type_name())),
             node_name: SpanParser(ident()),
-            arguments: combine::produce(Vec::new),
             properties: combine::produce(BTreeMap::new),
-            _: skip_many(node_space()),
-            children: optional(SpanParser(between(
-                token('{').and(skip_many(line_space())),
-                token('}').message("unclosed block"),
-                repeat_until(
-                    opaque!(no_partial(SpanParser(node())))
-                        .skip(skip_many(line_space())),
-                    token('}').map(|_| ()).or(eof())),
-            ))),
+            arguments: combine::produce(Vec::new),
+            children: combine::produce(|| None),
         }
-    }
+    ).and(
+        repeat_until(
+            node_space().with(optional(prop_or_arg())),
+            token('{').or(node_terminator()),
+        )
+    ).and(
+        optional(children())
+    ).skip(
+        node_terminator()
+    ).map(|((mut node, list), children): ((Node<_>, Vec<_>), _)| {
+        node.extend(list.into_iter().flat_map(|opt| opt));
+        node.children = children;
+        node
+    })
 }
 
 impl<'a, I, S> SpanStream for state::Stream<I, SpanState<'a, S>>
@@ -402,6 +484,43 @@ mod test {
         assert_eq!(nval.node_name.as_ref(), "timeout");
         assert_eq!(nval.type_name.as_ref().map(|x| &***x),
                    Some("std::duration"));
+
+        let nval = parse(node(), "hello \"arg1\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = parse(node(), "hello (string)\"arg1\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&***nval.arguments[0].type_name.as_ref().unwrap(),
+                   "string");
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = parse(node(), "hello key=(string)\"arg1\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&***nval.properties.get("key").unwrap()
+                   .type_name.as_ref().unwrap(),
+                   "string");
+        assert_eq!(&*nval.properties.get("key").unwrap().literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = parse(node(), "hello key=\"arg1\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&*nval.properties.get("key").unwrap().literal,
+                   &Literal::String("arg1".into()));
 
         let nval = parse(node(), "parent {\nchild\n}").unwrap();
         assert_eq!(nval.node_name.as_ref(), "parent");

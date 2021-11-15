@@ -44,10 +44,31 @@ impl SpanContext<usize> for FileContext {
     }
 }
 
+impl<T, S> Spanned<T, S> {
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Spanned<R, S> {
+        Spanned {
+            span: self.span,
+            value: f(self.value),
+        }
+    }
+}
+
 impl<T, S> std::ops::Deref for Spanned<T, S> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.value
+    }
+}
+
+impl<T, S> std::borrow::Borrow<T> for Spanned<T, S> {
+    fn borrow(&self) -> &T {
+        self.value.borrow()
+    }
+}
+
+impl<T: ?Sized, S> std::borrow::Borrow<T> for Spanned<Box<T>, S> {
+    fn borrow(&self) -> &T {
+        self.value.borrow()
     }
 }
 
