@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use combine::error::StreamError;
 use combine::parser::combinator::{recognize, no_partial};
-use combine::parser::repeat::{repeat_skip_until, repeat_until};
+use combine::parser::repeat::{repeat_skip_until, repeat_until, skip_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
-use combine::{eof, optional, count_min_max, between, position, any, choice};
-use combine::{opaque, attempt, sep_end_by1, unexpected_any, unexpected};
-use combine::{many, skip_many1, skip_many, satisfy, satisfy_map};
+use combine::{eof, optional, between, position, any, choice};
+use combine::{opaque, attempt, count_min_max, count};
+use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
 use crate::ast::{Literal, TypeName, Node, Value};
 use crate::ast::{SpannedName, SpannedChildren};
@@ -159,14 +159,47 @@ fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
         }))
 }
 
-
-fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+fn escaped_string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     between(token('"'), token('"').message("unclosed quoted string"), many(
         satisfy(|c| c != '"' && c != '\\')
         .or(token('\\').with(esc_value()))
         .silent()  // expose only unexpected '"'
     ))
     .map(|val: String| val.into())
+}
+
+fn raw_string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+    choice((
+        between(attempt((token('r'), token('"'))).silent(),
+                token('"').message("unclosed raw string"),
+                many(satisfy(|c| c != '"'))),
+        attempt((token('r'), token('#'))).silent()
+            .with(parser(|input| {
+                let mut iter = token('#').iter(input);
+                let cnt = (&mut iter).count();
+                iter.into_result(cnt + 1)
+            })).skip(token('"'))
+            .then(|n| {
+                let mut quote = String::with_capacity(n+1);
+                quote.push('"');
+                for _ in 0..n {
+                    quote.push('#');
+                }
+                let until = token('"')
+                    .with(count_min_max::<(), _, _>(n, n, token('#')))
+                    .or(eof());
+                let end = token('"')
+                    .with(count_min_max::<(), _, _>(n, n, token('#')))
+                    .silent()
+                    .expected(combine::error::Info::Format(quote))
+                    .message("unclosed raw string");
+                recognize(skip_until(attempt(until))).skip(end)
+            }),
+    )).map(|val: String| val.into())
+}
+
+fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+    raw_string().or(escaped_string())
 }
 
 fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
@@ -463,6 +496,14 @@ mod test {
     }
 
     #[test]
+    fn parse_raw_str() {
+        assert_eq!(&*parse(string(), r#"r"hello""#).unwrap(), "hello");
+        assert_eq!(&*parse(string(), r##"r#"world"#"##).unwrap(), "world");
+        assert_eq!(&*parse(string(), r####"r###"a\nb"###"####).unwrap(),
+                   "a\\nb");
+    }
+
+    #[test]
     fn parse_str_err() {
         let err = parse(string(), r#""hello"#).unwrap_err();
         println!("{}", err);
@@ -485,11 +526,29 @@ mod test {
         println!("{}", err);
         assert_eq!(err.position, 4);
         assert!(err.to_string().contains("invalid escape char"));
+    }
 
-        let err = parse(string(), r#"xxx"#).unwrap_err();
+    #[test]
+    fn parse_raw_str_err() {
+        let err = parse(string(), r#"r"hello"#).unwrap_err();
         println!("{}", err);
         assert!(err.to_string().contains("Expected `\"`"));
-        assert!(!err.to_string().contains("unclosed quoted string"));
+        assert!(err.to_string().contains("unclosed raw string"));
+
+        let err = parse(string(), r###"r#"hello""###).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("Expected `\"#`"));
+        assert!(err.to_string().contains("unclosed raw string"));
+
+        let err = parse(string(), r####"r###"hello"####).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("Expected `\"###`"));
+        assert!(err.to_string().contains("unclosed raw string"));
+
+        let err = parse(string(), r####"r###"hello"#"####).unwrap_err();
+        println!("{}", err);
+        assert!(err.to_string().contains("Expected `\"###`"));
+        assert!(err.to_string().contains("unclosed raw string"));
     }
 
     #[test]
