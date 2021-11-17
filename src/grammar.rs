@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use combine::error::StreamError;
 use combine::parser::combinator::{recognize, no_partial};
+use combine::parser::char::{digit, oct_digit, hex_digit};
 use combine::parser::repeat::{repeat_skip_until, repeat_until, skip_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
@@ -10,7 +11,7 @@ use combine::{eof, optional, between, position, any, choice};
 use combine::{opaque, attempt, count_min_max, count};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
-use crate::ast::{Literal, TypeName, Node, Value};
+use crate::ast::{Literal, TypeName, Node, Value, Integer, Radix};
 use crate::ast::{SpannedName, SpannedChildren};
 use crate::span::{Spanned, SpanContext};
 
@@ -202,6 +203,56 @@ fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     raw_string().or(escaped_string())
 }
 
+fn num_seq<I: Stream<Token=char>, P>(sign: Option<char>, digit: fn() -> P)
+    -> impl Parser<I, Output=String>
+    where P: Parser<I, Output=char>
+{
+    digit().then(move |first| {
+        parser(move |input| {
+            let mut s = String::new();
+            sign.map(|c| s.push(c));
+            s.push(first);
+            let parser = digit().map(Some) .or(token('_').map(|_| None));
+            let mut iter = parser.iter(input);
+            s.extend((&mut iter).flat_map(|x| x));
+            iter.into_result(s)
+        })
+    })
+}
+
+fn opt_sign<I: Stream<Token=char>>() -> impl Parser<I, Output=Option<char>> {
+    optional(choice((
+        combine::token('+'),
+        combine::token('-'),
+    )))
+}
+
+fn bin_digit<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
+    combine::token('0').or(combine::token('1'))
+}
+
+
+fn radix_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+    choice((
+        attempt(opt_sign().skip(token('0')).skip(token('b')))
+            .then(|sign| num_seq(sign, bin_digit))
+            .map(|s| Integer(Radix::Bin, s.into())),
+        attempt(opt_sign().skip(token('0')).skip(token('o')))
+            .then(|sign| num_seq(sign, oct_digit))
+            .map(|s| Integer(Radix::Oct, s.into())),
+        attempt(opt_sign().skip(token('0')).skip(token('x')))
+            .then(|sign| num_seq(sign, hex_digit))
+            .map(|s| Integer(Radix::Hex, s.into())),
+    )).map(|val| Literal::Int(val))
+}
+
+fn number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+    choice((
+        radix_number(),
+    ))
+}
+
+
 fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     let sign = token('+').or(token('-'));
     attempt(recognize(choice((
@@ -279,7 +330,7 @@ fn literal<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     choice((
         string().map(Literal::String),
         keyword(),
-        // TODO: number
+        number(),
     ))
 }
 
@@ -290,7 +341,7 @@ fn arg_value<I>() -> impl Parser<I, Output=Value<I::Span>>
 {
     SpanParser(choice((
         keyword(),
-        // TODO: number
+        number(),
     ))).map(|literal| Value { type_name: None, literal })
 }
 
@@ -416,10 +467,10 @@ mod test {
     use combine::easy::{Stream, Errors};
 
     use crate::span::{Span, SimpleContext};
-    use crate::ast::{Literal, TypeName};
+    use crate::ast::{Literal, TypeName, Integer, Radix};
 
     use super::{ws, comment, ml_comment, string, ident, type_name, node};
-    use super::{literal};
+    use super::{literal, number};
     use super::{SpanParser, SpanState};
 
 
@@ -691,5 +742,17 @@ mod test {
         println!("{}", err);
         println!("{:?}", err);
         assert!(err.to_string().contains("cannot be used as argument"));
+    }
+
+    #[test]
+    fn parse_radix_number() {
+        assert_eq!(parse(number(), "0x12").unwrap(),
+                   Literal::Int(Integer(Radix::Hex, "12".into())));
+        assert_eq!(parse(number(), "0xab_12").unwrap(),
+                   Literal::Int(Integer(Radix::Hex, "ab12".into())));
+        assert_eq!(parse(number(), "0o17").unwrap(),
+                   Literal::Int(Integer(Radix::Oct, "17".into())));
+        assert_eq!(parse(number(), "0b1010_101").unwrap(),
+                   Literal::Int(Integer(Radix::Bin, "1010101".into())));
     }
 }

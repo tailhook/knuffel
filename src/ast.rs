@@ -22,9 +22,17 @@ pub struct Document<S> {
     pub children: Vec<Spanned<Node<S>, S>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Radix {
+    Bin,
+    Hex,
+    Oct,
+    Dec,
+}
+
 /// Potentially unlimited size integer value
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Integer(Box<str>);
+pub struct Integer(pub(crate) Radix, pub(crate) Box<str>);
 
 /// Potentially unlimited precision decimal value
 #[derive(Debug, Clone, PartialEq, Eq)]
