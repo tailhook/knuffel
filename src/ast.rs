@@ -36,7 +36,7 @@ pub struct Integer(pub(crate) Radix, pub(crate) Box<str>);
 
 /// Potentially unlimited precision decimal value
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Decimal(Box<str>);
+pub struct Decimal(pub(crate) Box<str>);
 
 /// Possibly typed value
 #[derive(Debug, Clone)]

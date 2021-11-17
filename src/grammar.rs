@@ -11,7 +11,7 @@ use combine::{eof, optional, between, position, any, choice};
 use combine::{opaque, attempt, count_min_max, count};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
-use crate::ast::{Literal, TypeName, Node, Value, Integer, Radix};
+use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
 use crate::ast::{SpannedName, SpannedChildren};
 use crate::span::{Spanned, SpanContext};
 
@@ -249,7 +249,32 @@ fn radix_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
 fn number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     choice((
         radix_number(),
+        decimal_number(),
     ))
+}
+
+fn decimal_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+    (
+        // TODO(tailhook) may attempt() only first digit
+        attempt(opt_sign().then(|sign| num_seq(sign, digit))),
+        optional(token('.').with(num_seq(None, digit))),
+        optional(token('e').or(token('E'))
+            .with(opt_sign().then(|sign| num_seq(sign, digit)))),
+    ).map(|(mut int, opt_dec, opt_exp)| {
+        if opt_dec.is_some() || opt_exp.is_some() {
+            if let Some(dec) = opt_dec {
+                int.push('.');
+                int.push_str(&dec);
+            }
+            if let Some(val) = opt_exp {
+                int.push('e');
+                int.push_str(&val);
+            }
+            Literal::Decimal(Decimal(int.into()))
+        } else {
+            Literal::Int(Integer(Radix::Dec, int.into()))
+        }
+    })
 }
 
 
@@ -467,7 +492,7 @@ mod test {
     use combine::easy::{Stream, Errors};
 
     use crate::span::{Span, SimpleContext};
-    use crate::ast::{Literal, TypeName, Integer, Radix};
+    use crate::ast::{Literal, TypeName, Integer, Radix, Decimal};
 
     use super::{ws, comment, ml_comment, string, ident, type_name, node};
     use super::{literal, number};
@@ -754,5 +779,19 @@ mod test {
                    Literal::Int(Integer(Radix::Oct, "17".into())));
         assert_eq!(parse(number(), "0b1010_101").unwrap(),
                    Literal::Int(Integer(Radix::Bin, "1010101".into())));
+    }
+
+    #[test]
+    fn parse_number() {
+        assert_eq!(parse(number(), "12").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "12".into())));
+        assert_eq!(parse(number(), "123_555").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "123555".into())));
+        assert_eq!(parse(number(), "123.555").unwrap(),
+                   Literal::Decimal(Decimal("123.555".into())));
+        assert_eq!(parse(number(), "+1_23.5_55E-17").unwrap(),
+                   Literal::Decimal(Decimal("+123.555e-17".into())));
+        assert_eq!(parse(number(), "123e+555").unwrap(),
+                   Literal::Decimal(Decimal("123e+555".into())));
     }
 }
