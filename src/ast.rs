@@ -113,3 +113,17 @@ impl std::ops::Deref for TypeName {
     }
 }
 
+impl<S> TryFrom<&'_ Spanned<Literal, S>> for u64 {
+    type Error = ();
+    fn try_from(val: &Spanned<Literal, S>) -> Result<u64, ()> {
+        todo!();
+    }
+}
+
+impl TryFrom<&'_ Literal> for u64 {
+    type Error = ();
+    fn try_from(val: &Literal) -> Result<u64, ()> {
+        todo!();
+    }
+}
+

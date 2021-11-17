@@ -30,6 +30,8 @@ trait SpanStream: Stream {
 enum PropOrArg<S> {
     Prop(SpannedName<S>, Value<S>),
     Arg(Value<S>),
+    Ignore,
+    IgnoreChildren,
 }
 
 fn token<I: Stream<Token=char>>(val: char) -> impl Parser<I, Output=()> {
@@ -326,22 +328,6 @@ fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
     ))
 }
 
-impl<S> Extend<PropOrArg<S>> for Node<S> {
-    fn extend<I: IntoIterator<Item=PropOrArg<S>>>(&mut self, iter: I) {
-        use PropOrArg::*;
-        for item in iter {
-            match item {
-                Prop(key, val) => {
-                    self.properties.insert(key, val);
-                }
-                Arg(val) => {
-                    self.arguments.push(val);
-                }
-            }
-        }
-    }
-}
-
 fn keyword<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     use combine::parser::char::string as keyword;
     choice((
@@ -439,7 +425,18 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
         )
     ).and(
         repeat_until(
-            node_space().with(optional(prop_or_arg())),
+            node_space().with(optional(choice((
+                attempt((token('/'), token('-')))
+                    .and(skip_many(node_space()))
+                    .with(optional(prop_or_arg())).map(|opt| {
+                        if opt.is_some() {
+                            PropOrArg::Ignore
+                        } else {
+                            PropOrArg::IgnoreChildren
+                        }
+                    }),
+                prop_or_arg(),
+            ))).map(|x| x.unwrap_or(PropOrArg::Ignore))),
             token('{').or(node_terminator()),
         )
     ).and(
@@ -447,8 +444,22 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
     ).skip(
         node_terminator()
     ).map(|((mut node, list), children): ((Node<_>, Vec<_>), _)| {
-        node.extend(list.into_iter().flat_map(|opt| opt));
-        node.children = children;
+        use PropOrArg::*;
+
+        if !matches!(list.last(), Some(IgnoreChildren)) {
+            node.children = children;
+        }
+        for item in list {
+            match item {
+                Prop(key, val) => {
+                    node.properties.insert(key, val);
+                }
+                Arg(val) => {
+                    node.arguments.push(val);
+                }
+                Ignore|IgnoreChildren => {}
+            }
+        }
         node
     })
 }
@@ -748,6 +759,34 @@ mod test {
                    "child1");
         assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
                    "child2");
+
+        let nval = parse(node(), "hello /-\"skip_arg\" \"arg2\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg2".into()));
+
+        let nval = parse(node(), "hello /- \"skip_arg\" \"arg2\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg2".into()));
+
+        let nval = parse(node(), "hello prop1=\"1\" /-prop1=\"2\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&*nval.properties.get("prop1").unwrap().literal,
+                   &Literal::String("1".into()));
+
+        let nval = parse(node(), "parent /-{\nchild\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 0);
     }
 
     #[test]
