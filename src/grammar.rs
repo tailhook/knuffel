@@ -216,7 +216,7 @@ fn num_seq<I: Stream<Token=char>, P>(sign: Option<char>, digit: fn() -> P)
             s.push(first);
             let parser = digit().map(Some) .or(token('_').map(|_| None));
             let mut iter = parser.iter(input);
-            s.extend((&mut iter).flat_map(|x| x));
+            s.extend((&mut iter).flatten());
             iter.into_result(s)
         })
     })
@@ -315,16 +315,34 @@ fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
     ws().or(esc_line()).map(|_| ()).silent()
 }
 
+fn nodes<I>() -> impl Parser<I, Output=Vec<Spanned<Node<I::Span>, I::Span>>>
+    where I: SpanStream<Token=char>,
+{
+    skip_many(line_space())
+    .with(repeat_until(
+        (
+            optional(attempt((token('/'), token('-')))
+                     .skip(skip_many(node_space()))),
+            opaque!(no_partial(
+                SpanParser(node()))).skip(skip_many(line_space()))
+        ).map(|(opt, node)| {
+            if opt.is_some() {
+                None // commented out node
+            } else {
+                Some(node)
+            }
+        }),
+        token('}').or(eof())))
+    .map(|v: Vec<_>| v.into_iter().flatten().collect())
+}
+
 fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
     where I: SpanStream<Token=char>,
 {
     SpanParser(between(
-        token('{').and(skip_many(line_space())),
+        token('{'),
         token('}').message("unclosed block"),
-        repeat_until(
-            opaque!(no_partial(SpanParser(node())))
-                .skip(skip_many(line_space())),
-            token('}').or(eof())),
+        nodes(),
     ))
 }
 
@@ -506,7 +524,7 @@ mod test {
     use crate::ast::{Literal, TypeName, Integer, Radix, Decimal};
 
     use super::{ws, comment, ml_comment, string, ident, type_name, node};
-    use super::{literal, number};
+    use super::{literal, number, nodes};
     use super::{SpanParser, SpanState};
 
 
@@ -787,6 +805,20 @@ mod test {
         let nval = parse(node(), "parent /-{\nchild\n}").unwrap();
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 0);
+
+    }
+
+    #[test]
+    fn parse_nodes() {
+        let nval = parse(nodes(), "parent {\n/-  child\n}").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "parent");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "/-parent {\n  child\n}\nsecond").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "second");
+        assert_eq!(nval[0].children().len(), 0);
     }
 
     #[test]
