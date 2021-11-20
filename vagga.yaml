@@ -11,9 +11,16 @@ commands:
     container: ubuntu
     run: [cargo]
 
+  test-derive: !Command
+    description: Run tests for derive
+    container: ubuntu
+    work-dir: derive
+    run: [cargo, test]
+
   test: !Command
     description: Run tests
     container: ubuntu
+    prerequisites: [test-derive]
     run: [cargo, test]
 
 containers:

@@ -10,6 +10,12 @@ pub struct RawError<S> {
     messages: Vec<String>,
 }
 
+#[derive(Debug)]
+pub struct Error<S> {
+    span: S,
+    text: String,
+}
+
 impl<S: fmt::Display + fmt::Debug> std::error::Error for RawError<S> {}
 
 impl<S: fmt::Display> fmt::Display for RawError<S> {

@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::span::Spanned;
 
-pub type SpannedChildren<S> = Spanned<Vec<Spanned<Node<S>, S>>, S>;
+pub type SpannedChildren<S> = Spanned<Vec<SpannedNode<S>>, S>;
 pub type SpannedName<S> = Spanned<Box<str>, S>;
+pub type SpannedNode<S> = Spanned<Node<S>, S>;
 
 /// Single node of the KDL document
 #[derive(Debug, Clone)]
@@ -12,7 +13,7 @@ pub struct Node<S> {
     pub node_name: Spanned<Box<str>, S>,
     pub arguments: Vec<Value<S>>,
     pub properties: BTreeMap<Spanned<Box<str>, S>, Value<S>>,
-    pub children: Option<Spanned<Vec<Spanned<Node<S>, S>>, S>>,
+    pub children: Option<SpannedChildren<S>>,
 }
 
 /// KDL document root

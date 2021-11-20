@@ -523,9 +523,8 @@ impl<P: Parser<I>, I: SpanStream> Parser<I> for SpanParser<P> {
 mod test {
 
     use combine::eof;
-    use combine::error::StringStreamError;
     use combine::{Parser};
-    use combine::stream::{state, PointerOffset};
+    use combine::stream::state;
     use combine::easy::{Stream, Errors};
 
     use crate::span::{Span, SimpleContext};
