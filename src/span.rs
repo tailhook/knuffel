@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use combine::stream::{StreamOnce};
 
 /// Keeps object's boundary positions in the original file
 #[derive(Clone, Debug)]

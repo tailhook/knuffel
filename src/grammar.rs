@@ -7,22 +7,23 @@ use combine::parser::repeat::{repeat_skip_until, repeat_until, skip_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
-use combine::{eof, optional, between, position, any, choice};
-use combine::{opaque, attempt, count_min_max, count};
+use combine::{eof, optional, between, any, choice};
+use combine::{opaque, attempt, count_min_max};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
-use crate::ast::{SpannedName, SpannedChildren};
+use crate::ast::{SpannedName, SpannedChildren, Document};
 use crate::span::{Spanned, SpanContext};
+
 
 struct SpanParser<P>(P);
 
 pub struct SpanState<'a, S: SpanContext<usize>> {
-    span_context: S,
-    data: &'a str,
+    pub(crate) span_context: S,
+    pub(crate) data: &'a str,
 }
 
-trait SpanStream: Stream {
+pub(crate) trait SpanStream: Stream {
     type Span;
     fn span_from(&self, start: Self::Position) -> Self::Span;
 }
@@ -336,6 +337,7 @@ fn nodes<I>() -> impl Parser<I, Output=Vec<Spanned<Node<I::Span>, I::Span>>>
     .map(|v: Vec<_>| v.into_iter().flatten().collect())
 }
 
+
 fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
     where I: SpanStream<Token=char>,
 {
@@ -344,6 +346,12 @@ fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
         token('}').message("unclosed block"),
         nodes(),
     ))
+}
+
+pub(crate) fn document<I>() -> impl Parser<I, Output=Document<I::Span>>
+    where I: SpanStream<Token=char>,
+{
+    nodes().skip(eof()).map(|nodes| Document { nodes })
 }
 
 fn keyword<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
