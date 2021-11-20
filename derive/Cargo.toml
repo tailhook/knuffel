@@ -20,4 +20,4 @@ quote = "1.0.10"
 proc-macro2 = "1.0.32"
 
 [dev-dependencies]
-knuffel = { path=".." }
+knuffel = { path="../lib" }
