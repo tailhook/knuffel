@@ -11,19 +11,13 @@ pub enum Definition {
 }
 
 pub enum ArgKind {
-    Const(syn::Expr),
     Value { optional: bool },
-}
-
-enum AttributeMode {
-    NamedField,
-    PosField,
-    Container,
 }
 
 #[derive(Debug)]
 pub enum FieldMode {
     Argument,
+    Property,
 }
 
 #[derive(Debug)]
@@ -45,8 +39,11 @@ pub enum Kind {
 
 pub struct Arg {
     pub field: syn::Ident,
-    pub default: Option<syn::Expr>,
     pub kind: ArgKind,
+}
+
+pub struct Prop {
+    pub field: syn::Ident,
 }
 
 pub struct TupleArg {
@@ -56,7 +53,6 @@ pub struct TupleArg {
 
 pub enum ExtraKind {
     Default,
-    Value(syn::Expr),
 }
 
 pub struct ExtraField {
@@ -79,6 +75,7 @@ pub struct Struct {
     pub ident: syn::Ident,
     pub generics: syn::Generics,
     pub arguments: Vec<Arg>,
+    pub properties: Vec<Prop>,
     pub extra_fields: Vec<ExtraField>,
 }
 
@@ -110,6 +107,7 @@ impl Struct {
         -> syn::Result<Self>
     {
         let mut arguments = Vec::new();
+        let mut properties = Vec::new();
         let mut extra_fields = Vec::new();
         for fld in fields {
             let mut attrs = FieldAttrs::new();
@@ -126,8 +124,12 @@ impl Struct {
                 Some(FieldMode::Argument) => {
                     arguments.push(Arg {
                         field: fld.ident.unwrap(),
-                        default: None,
                         kind: ArgKind::Value { optional: false },
+                    });
+                }
+                Some(FieldMode::Property) => {
+                    properties.push(Prop {
+                        field: fld.ident.unwrap(),
                     });
                 }
                 None => {
@@ -143,12 +145,14 @@ impl Struct {
             ident,
             generics,
             arguments,
+            properties,
             extra_fields,
         })
     }
     pub fn all_fields(&self) -> Vec<&syn::Ident> {
         let mut res = Vec::new();
         res.extend(self.arguments.iter().map(|a| &a.field));
+        res.extend(self.properties.iter().map(|p| &p.field));
         res.extend(self.extra_fields.iter().map(|f| &f.ident));
         return res;
     }
@@ -218,8 +222,17 @@ impl Attr {
         if lookahead.peek(kw::argument) {
             let _kw: kw::argument = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Argument))
+        } else if lookahead.peek(kw::property) {
+            let _kw: kw::property = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Property))
         } else {
             Err(lookahead.error())
         }
+    }
+}
+
+impl Prop {
+    pub fn name(&self) -> String {
+        self.field.to_string()
     }
 }

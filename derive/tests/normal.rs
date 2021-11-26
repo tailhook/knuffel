@@ -9,6 +9,12 @@ struct Arg1 {
     name: String,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Prop1 {
+    #[knuffel(property)]
+    label: String,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -27,4 +33,14 @@ fn parse_arg1() {
         "13..20: unexpected argument");
     assert_eq!(parse_err::<Arg1>(r#"node"#),
         "0..4: additional argument `name` is required");
+}
+
+#[test]
+fn parse_prop() {
+    assert_eq!(parse::<Prop1>(r#"node label="hello""#),
+               Prop1 { label: "hello".into() } );
+    assert_eq!(parse_err::<Prop1>(r#"node label="hello" y="world""#),
+        "19..20: unexpected property `y`");
+    assert_eq!(parse_err::<Prop1>(r#"node"#),
+        "0..4: property `label` is required");
 }
