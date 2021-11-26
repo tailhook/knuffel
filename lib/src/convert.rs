@@ -4,6 +4,7 @@ use crate::span::{Spanned};
 use crate::errors::{Error, ResultExt};
 use crate::traits::Span;
 
+
 impl TryFrom<&Integer> for u64 {
     type Error = <u64 as FromStr>::Err;
     fn try_from(val: &Integer) -> Result<u64, <u64 as FromStr>::Err> {
@@ -21,7 +22,7 @@ impl<S: Span> TryFrom<&'_ Spanned<Literal, S>> for u64 {
     fn try_from(val: &Spanned<Literal, S>) -> Result<u64, Error<S>> {
         match &**val {
             Literal::Int(ref value) => value.try_into().err_span(val.span()),
-            other => Err(Error::new(val.span(), "bad type")), // TODO
+            _ => Err(Error::new(val.span(), "expected integer value")),
         }
     }
 }
@@ -45,7 +46,7 @@ impl<S: Span> TryFrom<&'_ Spanned<Literal, S>> for String {
     fn try_from(val: &Spanned<Literal, S>) -> Result<String, Error<S>> {
         match &**val {
             Literal::String(ref s) => Ok(s.clone().into()),
-            other => Err(Error::new(val.span(), "bad type")), // TODO
+            _ => Err(Error::new(val.span(), "expected string value")),
         }
     }
 }
