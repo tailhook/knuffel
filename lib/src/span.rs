@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -108,5 +109,23 @@ impl<S, T: std::hash::Hash> std::hash::Hash for Spanned<T, S> {
         where H: std::hash::Hasher,
     {
         self.value.hash(state)
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)?;
+        "..".fmt(f)?;
+        self.1.fmt(f)?;
+        Ok(())
+    }
+}
+
+impl fmt::Display for FileSpan {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.display().fmt(f)?;
+        ":".fmt(f)?;
+        self.1.fmt(f)?;
+        Ok(())
     }
 }

@@ -76,6 +76,19 @@ impl<S: Clone> Error<S>  {
     }
 }
 
+impl<S: fmt::Display> fmt::Display for Error<S> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.span.fmt(f)?;
+        ": ".fmt(f)?;
+        match &self.inner {
+            InnerError::Static(s) => s.fmt(f)?,
+            InnerError::Text(s) => s.fmt(f)?,
+            InnerError::Wraps(e) => e.fmt(f)?,
+        }
+        Ok(())
+    }
+}
+
 impl<R, E, S: Clone> ResultExt<R, S> for Result<R, E>
     where E: std::error::Error + Send + Sync + 'static,
 {
