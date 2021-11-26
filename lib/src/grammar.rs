@@ -356,11 +356,11 @@ pub(crate) fn document<I>() -> impl Parser<I, Output=Document<I::Span>>
 
 fn keyword<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     use combine::parser::char::string as keyword;
-    choice((
+    attempt(choice((
         keyword("null").map(|_| Literal::Null),
         keyword("true").map(|_| Literal::Bool(true)),
         keyword("false").map(|_| Literal::Bool(false)),
-    ))
+    )))
 }
 
 fn literal<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
@@ -741,6 +741,14 @@ mod test {
         assert_eq!(nval.properties.len(), 0);
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("arg1".into()));
+
+        let nval = parse(node(), "node \"true\"").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "node");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("true".into()));
 
         let nval = parse(node(), "hello (string)\"arg1\"").unwrap();
         assert_eq!(nval.node_name.as_ref(), "hello");

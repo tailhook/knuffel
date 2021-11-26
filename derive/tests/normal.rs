@@ -13,5 +13,6 @@ fn parse<T: Decode<Span>>(text: &str) -> T {
 
 #[test]
 fn parse_arg1() {
-    assert_eq!(parse::<Arg1>(r#"node "hello""#), Arg1 { name: "hello".into() } );
+    assert_eq!(parse::<Arg1>(r#"node "hello""#),
+               Arg1 { name: "hello".into() } );
 }

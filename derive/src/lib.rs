@@ -1,12 +1,19 @@
 use proc_macro2::TokenStream;
 
 mod definition;
+mod node;
+mod kw;
 
 use definition::Definition;
 
 
-fn emit_decoder(_def: &Definition) -> syn::Result<TokenStream> {
-    todo!();
+fn emit_decoder(def: &Definition) -> syn::Result<TokenStream> {
+    match def {
+        Definition::Struct(s) => node::emit_struct(s),
+        Definition::TupleStruct(_) => todo!("decode tuple struct"),
+        Definition::UnitStruct(_) => todo!("decode unit struct"),
+        Definition::Enum(_) => todo!("decode enum"),
+    }
 }
 
 #[proc_macro_derive(Decode, attributes(knuffel))]

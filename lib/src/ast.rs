@@ -1,3 +1,4 @@
+use std::fmt;
 use std::collections::BTreeMap;
 
 use crate::span::Spanned;
@@ -101,11 +102,7 @@ impl TypeName {
             _ => TypeName(TypeNameInner::Custom(val)),
         }
     }
-}
-
-impl std::ops::Deref for TypeName {
-    type Target = str;
-    fn deref(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match &self.0 {
             TypeNameInner::Builtin(t) => t.as_str(),
             TypeNameInner::Custom(t) => t.as_ref(),
@@ -113,17 +110,15 @@ impl std::ops::Deref for TypeName {
     }
 }
 
-impl<S> TryFrom<&'_ Spanned<Literal, S>> for u64 {
-    type Error = ();
-    fn try_from(_val: &Spanned<Literal, S>) -> Result<u64, ()> {
-        todo!();
+impl std::ops::Deref for TypeName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
     }
 }
 
-impl TryFrom<&'_ Literal> for u64 {
-    type Error = ();
-    fn try_from(_val: &Literal) -> Result<u64, ()> {
-        todo!();
+impl fmt::Display for TypeName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.as_str().fmt(f)
     }
 }
-

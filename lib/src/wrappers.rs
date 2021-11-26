@@ -22,3 +22,11 @@ pub fn raw_parse(text: &str) -> Result<Document<Span>, RawError<Span>> {
     })?;
     Ok(doc)
 }
+
+
+#[test]
+fn normal() {
+    let doc = raw_parse(r#"node "hello""#).unwrap();
+    assert_eq!(doc.nodes.len(), 1);
+    assert_eq!(&**doc.nodes[0].node_name, "node");
+}

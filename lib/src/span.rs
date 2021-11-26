@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::traits;
 
 /// Keeps object's boundary positions in the original file
 #[derive(Clone, Debug)]
@@ -16,6 +17,9 @@ pub struct Span(pub usize, pub usize);
 /// Span used for configs that are split across different files
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileSpan(pub Arc<PathBuf>, pub Span);
+
+impl traits::Span for Span {}
+impl traits::Span for FileSpan {}
 
 /// Adds custom span type ot the abstract syntax tree (AST) nodes
 pub trait SpanContext<P> {

@@ -1,6 +1,12 @@
+use std::borrow::Cow;
 use std::fmt;
+
 use combine::easy::Errors;
 use combine::stream::easy::Error as Err;
+
+pub(crate) trait ResultExt<T, S: Clone> {
+    fn err_span(self, s: &S) -> Result<T, Error<S>>;
+}
 
 #[derive(Debug)]
 pub struct RawError<S> {
@@ -11,9 +17,16 @@ pub struct RawError<S> {
 }
 
 #[derive(Debug)]
+pub enum InnerError {
+    Static(&'static str),
+    Text(Box<str>),
+    Wraps(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+#[derive(Debug)]
 pub struct Error<S> {
     span: S,
-    text: String,
+    inner: InnerError,
 }
 
 impl<S: fmt::Display + fmt::Debug> std::error::Error for RawError<S> {}
@@ -39,6 +52,38 @@ impl<S: fmt::Display> fmt::Display for RawError<S> {
             msg.fmt(f)?;
         }
         Ok(())
+    }
+}
+
+impl<S: Clone> Error<S>  {
+    pub fn new(span: &S, text: impl Into<Cow<'static, str>>)
+        -> Error<S>
+    {
+        match text.into() {
+            Cow::Borrowed(txt) => {
+                Error {
+                    span: span.clone(),
+                    inner: InnerError::Static(txt),
+                }
+            }
+            Cow::Owned(txt) => {
+                Error {
+                    span: span.clone(),
+                    inner: InnerError::Text(txt.into()),
+                }
+            }
+        }
+    }
+}
+
+impl<R, E, S: Clone> ResultExt<R, S> for Result<R, E>
+    where E: std::error::Error + Send + Sync + 'static,
+{
+    fn err_span(self, s: &S) -> Result<R, Error<S>> {
+        self.map_err(|e| Error {
+            span: s.clone(),
+            inner: InnerError::Wraps(Box::new(e)),
+        })
     }
 }
 
