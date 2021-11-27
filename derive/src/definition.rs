@@ -20,6 +20,7 @@ pub enum FieldMode {
     Property,
     Arguments,
     Properties,
+    Children,
 }
 
 #[derive(Debug)]
@@ -56,6 +57,10 @@ pub struct VarProps {
     pub field: syn::Ident,
 }
 
+pub struct VarChildren {
+    pub field: syn::Ident,
+}
+
 pub struct TupleArg {
     pub default: Option<syn::Expr>,
     pub kind: ArgKind,
@@ -88,6 +93,8 @@ pub struct Struct {
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
     pub var_props: Option<VarProps>,
+    pub children_only: bool,
+    pub children: Option<VarChildren>,
     pub extra_fields: Vec<ExtraField>,
 }
 
@@ -131,6 +138,7 @@ impl Struct {
         let mut var_args = None::<VarArgs>;
         let mut properties = Vec::new();
         let mut var_props = None::<VarProps>;
+        let mut children = None::<VarChildren>;
         let mut extra_fields = Vec::new();
         for fld in fields {
             let mut attrs = FieldAttrs::new();
@@ -185,6 +193,16 @@ impl Struct {
                         field: fld.ident.unwrap(),
                     });
                 }
+                Some(FieldMode::Children) => {
+                    if let Some(prev) = children {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "only single catch all `children` is allowed",
+                            "previous `children` is defined here"));
+                    }
+                    children = Some(VarChildren {
+                        field: fld.ident.unwrap(),
+                    });
+                }
                 None => {
                     extra_fields.push(ExtraField {
                         ident: fld.ident.unwrap(),
@@ -197,10 +215,13 @@ impl Struct {
         Ok(Struct {
             ident,
             generics,
+            children_only: arguments.is_empty() && properties.is_empty() &&
+                var_args.is_none() && var_props.is_none(),
             arguments,
             var_args,
             properties,
             var_props,
+            children,
             extra_fields,
         })
     }
@@ -210,6 +231,7 @@ impl Struct {
         res.extend(self.var_args.iter().map(|a| &a.field));
         res.extend(self.properties.iter().map(|p| &p.field));
         res.extend(self.var_props.iter().map(|p| &p.field));
+        res.extend(self.children.iter().map(|c| &c.field));
         res.extend(self.extra_fields.iter().map(|f| &f.ident));
         return res;
     }
@@ -288,6 +310,9 @@ impl Attr {
         } else if lookahead.peek(kw::properties) {
             let _kw: kw::properties = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Properties))
+        } else if lookahead.peek(kw::children) {
+            let _kw: kw::children = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Children))
         } else {
             Err(lookahead.error())
         }

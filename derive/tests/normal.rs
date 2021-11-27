@@ -28,6 +28,12 @@ struct VarProp {
     scores: BTreeMap<String, u64>,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Children {
+    #[knuffel(children)]
+    children: Vec<Arg1>,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -75,4 +81,15 @@ fn parse_var_prop() {
                VarProp { scores } );
     assert_eq!(parse::<VarProp>(r#"scores"#),
                VarProp { scores: BTreeMap::new() } );
+}
+
+#[test]
+fn parse_children() {
+    assert_eq!(parse::<Children>(r#"parent { - "val1"; - "val2"; }"#),
+               Children { children: vec! [
+                   Arg1 { name: "val1".into() },
+                   Arg1 { name: "val2".into() },
+               ]} );
+    assert_eq!(parse::<Children>(r#"parent"#),
+               Children { children: Vec::new() } );
 }

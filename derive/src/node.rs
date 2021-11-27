@@ -7,27 +7,58 @@ use crate::definition::Struct;
 pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
     let name = &s.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
+    let children = syn::Ident::new("children", Span::mixed_site());
     let decode_args = decode_args(s, &node)?;
     let decode_props = decode_props(s, &node)?;
+    let decode_children = decode_children(s, &children)?;
     let fields = s.all_fields();
-    Ok(quote! {
-        impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
-                -> Result<Self, ::knuffel::Error<S>>
-            {
-                #decode_args
-                #decode_props
-                Ok(#name {
-                    #(#fields,)*
-                })
+    if s.children_only {
+        Ok(quote! {
+            impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
+                fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
+                    -> Result<Self, ::knuffel::Error<S>>
+                {
+                    #decode_args  // these are basically assertions
+                    #decode_props // these are basically assertions
+                    let #children = #node.children.as_ref()
+                        .map(|lst| &lst[..]).unwrap_or(&[]);
+                    Self::decode_children(#children)
+                }
+                fn decode_children(#children: &[::knuffel::ast::SpannedNode<S>])
+                    -> Result<Self, ::knuffel::Error<S>>
+                {
+                    #decode_children
+                    Ok(#name {
+                        #(#fields,)*
+                    })
+                }
             }
-            fn decode_children(_nodes: &[::knuffel::ast::SpannedNode<S>])
-                -> Result<Self, ::knuffel::Error<S>>
-            {
-                todo!("decode children for Struct");
+        })
+    } else {
+        let err = format!("bare set of children cannot be parsed into {} \
+                           as it has arguments and properties", name);
+        Ok(quote! {
+            impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
+                fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
+                    -> Result<Self, ::knuffel::Error<S>>
+                {
+                    #decode_args
+                    #decode_props
+                    let #children = #node.children.as_ref()
+                        .map(|lst| &lst[..]).unwrap_or(&[]);
+                    #decode_children
+                    Ok(#name {
+                        #(#fields,)*
+                    })
+                }
+                fn decode_children(_nodes: &[::knuffel::ast::SpannedNode<S>])
+                    -> Result<Self, ::knuffel::Error<S>>
+                {
+                    Err(::knuffel::Error::new_global(#err))
+                }
             }
-        }
-    })
+        })
+    }
 }
 
 pub fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
@@ -120,4 +151,30 @@ pub fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         }
         #(#postprocess)*
     })
+}
+
+pub fn decode_children(s: &Struct, children: &syn::Ident)
+    -> syn::Result<TokenStream>
+{
+    let mut decoder = Vec::new();
+    let iter_children = syn::Ident::new("iter_children", Span::mixed_site());
+    decoder.push(quote! {
+        let mut #iter_children = #children.iter();
+    });
+    if let Some(children) = &s.children {
+        let fld = &children.field;
+        decoder.push(quote! {
+            let #fld = #iter_children
+                .map(|v| ::knuffel::Decode::decode_node(v))
+                .collect::<Result<_, _>>()?;
+        });
+    } else {
+        decoder.push(quote! {
+            if let Some(val) = #iter_children.next() {
+                return Err(::knuffel::Error::new(val.span(),
+                                                 "unexpected child node"));
+            }
+        });
+    }
+    Ok(quote! { #(#decoder)* })
 }
