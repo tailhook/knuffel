@@ -1,4 +1,5 @@
 use std::fmt;
+use std::collections::BTreeMap;
 
 use knuffel::{Decode, span::Span, raw_parse};
 
@@ -10,9 +11,21 @@ struct Arg1 {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct VarArg {
+    #[knuffel(arguments)]
+    params: Vec<u64>,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct Prop1 {
     #[knuffel(property)]
     label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct VarProp {
+    #[knuffel(properties)]
+    scores: BTreeMap<String, u64>,
 }
 
 fn parse<T: Decode<Span>>(text: &str) -> T {
@@ -43,4 +56,23 @@ fn parse_prop() {
         "19..20: unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
         "0..4: property `label` is required");
+}
+
+#[test]
+fn parse_var_arg() {
+    assert_eq!(parse::<VarArg>(r#"sum 1 2 3"#),
+               VarArg { params: vec![1, 2, 3] } );
+    assert_eq!(parse::<VarArg>(r#"sum"#),
+               VarArg { params: vec![] } );
+}
+
+#[test]
+fn parse_var_prop() {
+    let mut scores = BTreeMap::new();
+    scores.insert("john".into(), 13);
+    scores.insert("jack".into(), 7);
+    assert_eq!(parse::<VarProp>(r#"scores john=13 jack=7"#),
+               VarProp { scores } );
+    assert_eq!(parse::<VarProp>(r#"scores"#),
+               VarProp { scores: BTreeMap::new() } );
 }

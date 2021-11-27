@@ -45,49 +45,79 @@ pub fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             })?.try_into()?;
         });
     }
-    decoder.push(quote! {
-        if let Some(val) = #iter_args.next() {
-            return Err(::knuffel::Error::new(val.literal.span(),
-                                             "unexpected argument"));
-        }
-    });
+    if let Some(var_args) = &s.var_args {
+        let fld = &var_args.field;
+        decoder.push(quote! {
+            let #fld = #iter_args.map(|v| v.try_into())
+                .collect::<Result<_, _>>()?;
+        });
+    } else {
+        decoder.push(quote! {
+            if let Some(val) = #iter_args.next() {
+                return Err(::knuffel::Error::new(val.literal.span(),
+                                                 "unexpected argument"));
+            }
+        });
+    }
     Ok(quote! { #(#decoder)* })
 }
 
 pub fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
-    let mut declare_nones = Vec::new();
+    let mut declare_empty = Vec::new();
     let mut match_branches = Vec::new();
-    let mut unwrap_required = Vec::new();
+    let mut postprocess = Vec::new();
+
     let val = syn::Ident::new("val", Span::mixed_site());
+    let name = syn::Ident::new("name", Span::mixed_site());
+    let name_str = syn::Ident::new("name_str", Span::mixed_site());
+
     for prop in &s.properties {
         let fld = &prop.field;
-        let name = prop.name();
-        declare_nones.push(quote! {
+        let prop_name = prop.name();
+        declare_empty.push(quote! {
             let mut #fld = None;
         });
         match_branches.push(quote! {
-            #name => #fld = Some(#val.try_into()?),
+            #prop_name => #fld = Some(#val.try_into()?),
         });
-        let req_msg = format!("property `{}` is required", prop.name());
-        unwrap_required.push(quote! {
+        let req_msg = format!("property `{}` is required", prop_name);
+        postprocess.push(quote! {
             let #fld = #fld.ok_or_else(|| {
                 ::knuffel::Error::new(#node.node_name.span(), #req_msg)
             })?;
         });
     }
-    let name = syn::Ident::new("name", Span::mixed_site());
+    if let Some(var_props) = &s.var_props {
+        let fld = &var_props.field;
+        declare_empty.push(quote! {
+            let mut #fld = Vec::new();
+        });
+        match_branches.push(quote! {
+            #name_str => {
+                let converted_name = #name_str.parse()
+                    .map_err(|e| ::knuffel::Error::from_err(#name.span(), e))?;
+                #fld.push((converted_name, #val.try_into()?));
+            }
+        });
+        postprocess.push(quote! {
+            let #fld = #fld.into_iter().collect();
+        });
+    } else {
+        match_branches.push(quote! {
+            #name_str => {
+                return Err(::knuffel::Error::new(#name.span(),
+                    format!("unexpected property `{}`",
+                            #name_str.escape_default())));
+            }
+        });
+    };
     Ok(quote! {
-        #(#declare_nones)*
+        #(#declare_empty)*
         for (#name, #val) in #node.properties.iter() {
             match &***#name {
                 #(#match_branches)*
-                name => {
-                    return Err(::knuffel::Error::new(#name.span(),
-                        format!("unexpected property `{}`",
-                                name.escape_default())));
-                }
             }
         }
-        #(#unwrap_required)*
+        #(#postprocess)*
     })
 }

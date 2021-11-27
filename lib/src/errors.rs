@@ -74,6 +74,14 @@ impl<S: Clone> Error<S>  {
             }
         }
     }
+    pub fn from_err<E>(span: &S, err: E) -> Error<S>
+        where E: std::error::Error + Send + Sync + 'static,
+    {
+        Error {
+            span: span.clone(),
+            inner: InnerError::Wraps(Box::new(err)),
+        }
+    }
 }
 
 impl<S: fmt::Display> fmt::Display for Error<S> {
@@ -93,10 +101,7 @@ impl<R, E, S: Clone> ResultExt<R, S> for Result<R, E>
     where E: std::error::Error + Send + Sync + 'static,
 {
     fn err_span(self, s: &S) -> Result<R, Error<S>> {
-        self.map_err(|e| Error {
-            span: s.clone(),
-            inner: InnerError::Wraps(Box::new(e)),
-        })
+        self.map_err(|e| Error::from_err(s, e))
     }
 }
 

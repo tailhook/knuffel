@@ -18,6 +18,8 @@ pub enum ArgKind {
 pub enum FieldMode {
     Argument,
     Property,
+    Arguments,
+    Properties,
 }
 
 #[derive(Debug)]
@@ -42,7 +44,15 @@ pub struct Arg {
     pub kind: ArgKind,
 }
 
+pub struct VarArgs {
+    pub field: syn::Ident,
+}
+
 pub struct Prop {
+    pub field: syn::Ident,
+}
+
+pub struct VarProps {
     pub field: syn::Ident,
 }
 
@@ -75,7 +85,9 @@ pub struct Struct {
     pub ident: syn::Ident,
     pub generics: syn::Generics,
     pub arguments: Vec<Arg>,
+    pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
+    pub var_props: Option<VarProps>,
     pub extra_fields: Vec<ExtraField>,
 }
 
@@ -100,6 +112,15 @@ impl TupleStruct {
     }
 }
 
+fn err_pair(s1: impl quote::ToTokens, s2: impl quote::ToTokens,
+            t1: &str, t2: &str)
+    -> syn::Error
+{
+    let mut err = syn::Error::new_spanned(s1, t1);
+    err.combine(syn::Error::new_spanned(s2, t2));
+    return err;
+}
+
 impl Struct {
     fn new(ident: syn::Ident, generics: syn::Generics,
            _attrs: Vec<syn::Attribute>,
@@ -107,7 +128,9 @@ impl Struct {
         -> syn::Result<Self>
     {
         let mut arguments = Vec::new();
+        let mut var_args = None::<VarArgs>;
         let mut properties = Vec::new();
+        let mut var_props = None::<VarProps>;
         let mut extra_fields = Vec::new();
         for fld in fields {
             let mut attrs = FieldAttrs::new();
@@ -122,13 +145,43 @@ impl Struct {
             }
             match attrs.mode {
                 Some(FieldMode::Argument) => {
+                    if let Some(prev) = var_args {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "extra `argument` after capture all `arguments`",
+                            "capture all `arguments` is defined here"));
+                    }
                     arguments.push(Arg {
                         field: fld.ident.unwrap(),
                         kind: ArgKind::Value { optional: false },
                     });
                 }
+                Some(FieldMode::Arguments) => {
+                    if let Some(prev) = var_args {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "only single `arguments` allowed",
+                            "previous `arguments` is defined here"));
+                    }
+                    var_args = Some(VarArgs {
+                        field: fld.ident.unwrap(),
+                    });
+                }
                 Some(FieldMode::Property) => {
+                    if let Some(prev) = var_props {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "extra `property` after capture all `properties`",
+                            "capture all `properties` is defined here"));
+                    }
                     properties.push(Prop {
+                        field: fld.ident.unwrap(),
+                    });
+                }
+                Some(FieldMode::Properties) => {
+                    if let Some(prev) = var_props {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "only single `properties` is allowed",
+                            "previous `properties` is defined here"));
+                    }
+                    var_props = Some(VarProps {
                         field: fld.ident.unwrap(),
                     });
                 }
@@ -145,14 +198,18 @@ impl Struct {
             ident,
             generics,
             arguments,
+            var_args,
             properties,
+            var_props,
             extra_fields,
         })
     }
     pub fn all_fields(&self) -> Vec<&syn::Ident> {
         let mut res = Vec::new();
         res.extend(self.arguments.iter().map(|a| &a.field));
+        res.extend(self.var_args.iter().map(|a| &a.field));
         res.extend(self.properties.iter().map(|p| &p.field));
+        res.extend(self.var_props.iter().map(|p| &p.field));
         res.extend(self.extra_fields.iter().map(|f| &f.ident));
         return res;
     }
@@ -222,9 +279,15 @@ impl Attr {
         if lookahead.peek(kw::argument) {
             let _kw: kw::argument = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Argument))
+        } else if lookahead.peek(kw::arguments) {
+            let _kw: kw::arguments = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Arguments))
         } else if lookahead.peek(kw::property) {
             let _kw: kw::property = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Property))
+        } else if lookahead.peek(kw::properties) {
+            let _kw: kw::properties = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Properties))
         } else {
             Err(lookahead.error())
         }
