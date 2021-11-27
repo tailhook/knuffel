@@ -25,7 +25,7 @@ pub enum InnerError {
 
 #[derive(Debug)]
 pub struct Error<S> {
-    span: S,
+    span: Option<S>,
     inner: InnerError,
 }
 
@@ -62,13 +62,13 @@ impl<S: Clone> Error<S>  {
         match text.into() {
             Cow::Borrowed(txt) => {
                 Error {
-                    span: span.clone(),
+                    span: Some(span.clone()),
                     inner: InnerError::Static(txt),
                 }
             }
             Cow::Owned(txt) => {
                 Error {
-                    span: span.clone(),
+                    span: Some(span.clone()),
                     inner: InnerError::Text(txt.into()),
                 }
             }
@@ -78,16 +78,34 @@ impl<S: Clone> Error<S>  {
         where E: std::error::Error + Send + Sync + 'static,
     {
         Error {
-            span: span.clone(),
+            span: Some(span.clone()),
             inner: InnerError::Wraps(Box::new(err)),
+        }
+    }
+    pub fn new_global(text: impl Into<Cow<'static, str>>) -> Error<S> {
+        match text.into() {
+            Cow::Borrowed(txt) => {
+                Error {
+                    span: None,
+                    inner: InnerError::Static(txt),
+                }
+            }
+            Cow::Owned(txt) => {
+                Error {
+                    span: None,
+                    inner: InnerError::Text(txt.into()),
+                }
+            }
         }
     }
 }
 
 impl<S: fmt::Display> fmt::Display for Error<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.span.fmt(f)?;
-        ": ".fmt(f)?;
+        if let Some(span) = &self.span {
+            span.fmt(f)?;
+            ": ".fmt(f)?;
+        }
         match &self.inner {
             InnerError::Static(s) => s.fmt(f)?,
             InnerError::Text(s) => s.fmt(f)?,
@@ -106,7 +124,7 @@ impl<R, E, S: Clone> ResultExt<R, S> for Result<R, E>
 }
 
 impl<S, T, R> From<Errors<T, R, S>> for RawError<S>
-    where T: fmt::Display, R: fmt::Display,
+    where T: fmt::Display, R: fmt::Display, S: fmt::Debug
 {
     fn from(error: Errors<T, R, S>) -> RawError<S> {
         use std::fmt::Write;
