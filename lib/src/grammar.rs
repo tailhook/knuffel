@@ -8,7 +8,7 @@ use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
 use combine::{eof, optional, between, any, choice};
-use combine::{opaque, attempt, count_min_max};
+use combine::{opaque, attempt, count_min_max, not_followed_by};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
@@ -284,9 +284,9 @@ fn decimal_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
 fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
     let sign = token('+').or(token('-'));
     attempt(recognize(choice((
-        (sign, id_sans_dig(), skip_many(id_char())).map(|_| ()),
+        (sign, optional((id_sans_dig(), skip_many(id_char())))).map(|_| ()),
         (id_sans_sign_dig(), skip_many(id_char())).map(|_| ()),
-    ))).and_then(|s: String| {
+    )).skip(not_followed_by(digit()))).and_then(|s: String| {
         match &s[..] {
             "true" => Err(StreamErrorFor::<I>::unexpected("true")),
             "false" => Err(StreamErrorFor::<I>::unexpected("false")),
@@ -834,6 +834,41 @@ mod test {
         assert_eq!(nval.len(), 1);
         assert_eq!(nval[0].node_name.as_ref(), "second");
         assert_eq!(nval[0].children().len(), 0);
+
+    }
+
+    #[test]
+    fn parse_dashes() {
+        let nval = parse(nodes(), "-").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "-");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "--").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "--");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "--1").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "--1");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "-\n-").unwrap();
+        assert_eq!(nval.len(), 2);
+        assert_eq!(nval[0].node_name.as_ref(), "-");
+        assert_eq!(nval[0].children().len(), 0);
+        assert_eq!(nval[1].node_name.as_ref(), "-");
+        assert_eq!(nval[1].children().len(), 0);
+
+        let nval = parse(nodes(), "node -1 --x=2").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].arguments.len(), 1);
+        assert_eq!(nval[0].properties.len(), 1);
+        assert_eq!(&*nval[0].arguments[0].literal,
+                   &Literal::Int(Integer(Radix::Dec, "-1".into())));
+        assert_eq!(&*nval[0].properties.get("--x").unwrap().literal,
+                   &Literal::Int(Integer(Radix::Dec, "2".into())));
     }
 
     #[test]
