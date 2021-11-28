@@ -7,7 +7,7 @@ use combine::parser::repeat::{repeat_skip_until, repeat_until, skip_until};
 use combine::stream::state;
 use combine::stream::{PointerOffset, StreamErrorFor};
 use combine::{Stream, Parser};
-use combine::{eof, optional, between, any, choice};
+use combine::{eof, optional, between, any, choice, sep_by};
 use combine::{opaque, attempt, count_min_max, not_followed_by};
 use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
 
@@ -449,9 +449,9 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
                 children: combine::produce(|| None),
             }
         )
-    ).and(
-        repeat_until(
-            node_space().with(optional(choice((
+    ).and(optional(skip_many1(node_space()).with(
+        sep_by(
+            choice((
                 attempt((token('/'), token('-')))
                     .and(skip_many(node_space()))
                     .with(optional(prop_or_arg())).map(|opt| {
@@ -462,10 +462,10 @@ fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
                         }
                     }),
                 prop_or_arg(),
-            ))).map(|x| x.unwrap_or(PropOrArg::Ignore))),
-            token('{').or(node_terminator()),
+            )),
+            skip_many1(node_space()),
         )
-    ).and(
+    )).map(|opt| opt.unwrap_or_else(Vec::new))).and(
         optional(children())
     ).skip(
         node_terminator()
@@ -792,6 +792,12 @@ mod test {
                    "child1");
         assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
                    "child2");
+
+        let nval = parse(node(), "parent{\nchild3\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child3");
 
         let nval = parse(node(), "hello /-\"skip_arg\" \"arg2\"").unwrap();
         assert_eq!(nval.node_name.as_ref(), "hello");
