@@ -11,7 +11,7 @@ pub enum Definition {
 }
 
 pub enum ArgKind {
-    Value { optional: bool },
+    Value { option: bool },
 }
 
 #[derive(Debug)]
@@ -51,6 +51,7 @@ pub struct VarArgs {
 
 pub struct Prop {
     pub field: syn::Ident,
+    pub option: bool,
 }
 
 pub struct VarProps {
@@ -128,6 +129,19 @@ fn err_pair(s1: impl quote::ToTokens, s2: impl quote::ToTokens,
     return err;
 }
 
+fn is_option(ty: &syn::Type) -> bool {
+    matches!(ty,
+        syn::Type::Path(syn::TypePath {
+            qself: None,
+            path: syn::Path {
+                leading_colon: None,
+                segments,
+            },
+        })
+        if segments.len() == 1 && segments[0].ident == "Option"
+    )
+}
+
 impl Struct {
     fn new(ident: syn::Ident, generics: syn::Generics,
            _attrs: Vec<syn::Attribute>,
@@ -160,7 +174,7 @@ impl Struct {
                     }
                     arguments.push(Arg {
                         field: fld.ident.unwrap(),
-                        kind: ArgKind::Value { optional: false },
+                        kind: ArgKind::Value { option: is_option(&fld.ty) },
                     });
                 }
                 Some(FieldMode::Arguments) => {
@@ -181,6 +195,7 @@ impl Struct {
                     }
                     properties.push(Prop {
                         field: fld.ident.unwrap(),
+                        option: is_option(&fld.ty),
                     });
                 }
                 Some(FieldMode::Properties) => {

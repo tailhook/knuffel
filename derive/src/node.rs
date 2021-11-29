@@ -1,7 +1,7 @@
 use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
-use crate::definition::Struct;
+use crate::definition::{Struct, ArgKind};
 
 
 pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
@@ -69,12 +69,23 @@ pub fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     });
     for arg in &s.arguments {
         let fld = &arg.field;
-        let error = format!("additional argument `{}` is required", fld);
-        decoder.push(quote! {
-            let #fld = #iter_args.next().ok_or_else(|| {
-                ::knuffel::Error::new(#node.node_name.span(), #error)
-            })?.try_into()?;
-        });
+        match arg.kind {
+            ArgKind::Value { option: true } => {
+                decoder.push(quote! {
+                    let #fld = #iter_args.next()
+                        .map(|v| v.try_into()).transpose()?;
+                });
+            }
+            ArgKind::Value { option: false } => {
+                let error = format!("additional argument `{}` is required",
+                                    fld);
+                decoder.push(quote! {
+                    let #fld = #iter_args.next().ok_or_else(|| {
+                        ::knuffel::Error::new(#node.node_name.span(), #error)
+                    })?.try_into()?;
+                });
+            }
+        }
     }
     if let Some(var_args) = &s.var_args {
         let fld = &var_args.field;
@@ -112,11 +123,13 @@ pub fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             #prop_name => #fld = Some(#val.try_into()?),
         });
         let req_msg = format!("property `{}` is required", prop_name);
-        postprocess.push(quote! {
-            let #fld = #fld.ok_or_else(|| {
-                ::knuffel::Error::new(#node.node_name.span(), #req_msg)
-            })?;
-        });
+        if !prop.option {
+            postprocess.push(quote! {
+                let #fld = #fld.ok_or_else(|| {
+                    ::knuffel::Error::new(#node.node_name.span(), #req_msg)
+                })?;
+            });
+        }
     }
     if let Some(var_props) = &s.var_props {
         let fld = &var_props.field;

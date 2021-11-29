@@ -11,6 +11,12 @@ struct Arg1 {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct OptArg {
+    #[knuffel(argument)]
+    name: Option<String>,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct VarArg {
     #[knuffel(arguments)]
     params: Vec<u64>,
@@ -20,6 +26,12 @@ struct VarArg {
 struct Prop1 {
     #[knuffel(property)]
     label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct OptProp {
+    #[knuffel(property)]
+    label: Option<String>,
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -55,6 +67,14 @@ fn parse_arg1() {
 }
 
 #[test]
+fn parse_opt_arg() {
+    assert_eq!(parse::<OptArg>(r#"node "hello""#),
+               OptArg { name: Some("hello".into()) } );
+    assert_eq!(parse::<OptArg>(r#"node"#),
+               OptArg { name: None });
+}
+
+#[test]
 fn parse_prop() {
     assert_eq!(parse::<Prop1>(r#"node label="hello""#),
                Prop1 { label: "hello".into() } );
@@ -62,6 +82,14 @@ fn parse_prop() {
         "19..20: unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
         "0..4: property `label` is required");
+}
+
+#[test]
+fn parse_opt_prop() {
+    assert_eq!(parse::<OptProp>(r#"node label="hello""#),
+               OptProp { label: Some("hello".into()) } );
+    assert_eq!(parse::<OptProp>(r#"node"#),
+               OptProp { label: None } );
 }
 
 #[test]
