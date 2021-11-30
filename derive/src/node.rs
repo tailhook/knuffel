@@ -61,7 +61,7 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
     }
 }
 
-pub fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
+fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     let mut decoder = Vec::new();
     let iter_args = syn::Ident::new("iter_args", Span::mixed_site());
     decoder.push(quote! {
@@ -104,7 +104,7 @@ pub fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     Ok(quote! { #(#decoder)* })
 }
 
-pub fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
+fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     let mut declare_empty = Vec::new();
     let mut match_branches = Vec::new();
     let mut postprocess = Vec::new();
@@ -166,7 +166,7 @@ pub fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     })
 }
 
-pub fn decode_children(s: &Struct, children: &syn::Ident)
+fn decode_children(s: &Struct, children: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let mut decoder = Vec::new();

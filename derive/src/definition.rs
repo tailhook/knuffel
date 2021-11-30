@@ -7,7 +7,7 @@ pub enum Definition {
     UnitStruct(UnitStruct),
     TupleStruct(TupleStruct),
     Struct(Struct),
-    Enum(syn::ItemEnum),
+    Enum(Enum),
 }
 
 pub enum ArgKind {
@@ -99,6 +99,17 @@ pub struct Struct {
     pub extra_fields: Vec<ExtraField>,
 }
 
+pub struct Variant {
+    pub ident: syn::Ident,
+    pub name: String,
+}
+
+pub struct Enum {
+    pub ident: syn::Ident,
+    pub generics: syn::Generics,
+    pub variants: Vec<Variant>,
+}
+
 
 impl UnitStruct {
     fn new(ident: syn::Ident, generics: syn::Generics,
@@ -140,6 +151,53 @@ fn is_option(ty: &syn::Type) -> bool {
         })
         if segments.len() == 1 && segments[0].ident == "Option"
     )
+}
+
+impl Variant {
+    fn new(ident: syn::Ident, _attrs: Vec<syn::Attribute>) -> syn::Result<Self>
+    {
+        let name = heck::KebabCase::to_kebab_case(&ident.to_string()[..]);
+        Ok(Variant {
+            ident,
+            name,
+        })
+    }
+}
+
+impl Enum {
+    fn new(ident: syn::Ident, generics: syn::Generics,
+           _attrs: Vec<syn::Attribute>,
+           src_variants: impl Iterator<Item=syn::Variant>)
+        -> syn::Result<Self>
+    {
+        let mut variants = Vec::new();
+        for var in src_variants {
+            match var.fields {
+                syn::Fields::Named(n) => {
+                    return Err(syn::Error::new_spanned(n,
+                        "named fields are not supported in enum variants"));
+                }
+                syn::Fields::Unnamed(u) => {
+                    if u.unnamed.len() != 1 {
+                        return Err(syn::Error::new_spanned(u,
+                            "single field expected"));
+                    }
+                    variants.push(
+                        Variant::new(var.ident, var.attrs)?
+                    );
+                }
+                syn::Fields::Unit => {
+                    return Err(syn::Error::new_spanned(var.ident,
+                        "unit variants are not supported in enum variants"));
+                }
+            }
+        }
+        Ok(Enum {
+            ident,
+            generics,
+            variants,
+        })
+    }
 }
 
 impl Struct {
@@ -260,7 +318,7 @@ impl Parse for Definition {
 
         let lookahead = ahead.lookahead1();
         if lookahead.peek(syn::Token![struct]) {
-           let item: syn::ItemStruct = input.parse()?;
+            let item: syn::ItemStruct = input.parse()?;
             attrs.extend(item.attrs);
             match item.fields {
                 syn::Fields::Named(n) => {
@@ -279,7 +337,11 @@ impl Parse for Definition {
                 }
             }
         } else if lookahead.peek(syn::Token![enum]) {
-            input.parse().map(Definition::Enum)
+            let item: syn::ItemEnum = input.parse()?;
+            attrs.extend(item.attrs);
+            Enum::new(item.ident, item.generics, attrs,
+                      item.variants.into_iter())
+                .map(Definition::Enum)
         } else {
             Err(lookahead.error())
         }

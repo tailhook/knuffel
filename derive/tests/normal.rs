@@ -46,6 +46,12 @@ struct Children {
     children: Vec<Arg1>,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+enum Variant {
+    Arg1(Arg1),
+    Prop1(Prop1),
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -120,4 +126,14 @@ fn parse_children() {
                ]} );
     assert_eq!(parse::<Children>(r#"parent"#),
                Children { children: Vec::new() } );
+}
+
+#[test]
+fn parse_enum() {
+    assert_eq!(parse::<Variant>(r#"arg1 "hello""#),
+               Variant::Arg1(Arg1 { name: "hello".into() }));
+    assert_eq!(parse::<Variant>(r#"prop1 label="hello""#),
+               Variant::Prop1(Prop1 { label: "hello".into() }));
+    assert_eq!(parse_err::<Variant>(r#"something"#),
+        "0..9: expected one of `arg1`, `prop1`");
 }

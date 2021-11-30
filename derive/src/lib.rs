@@ -1,8 +1,9 @@
 use proc_macro2::TokenStream;
 
 mod definition;
-mod node;
 mod kw;
+mod node;
+mod variants;
 
 use definition::Definition;
 
@@ -12,7 +13,7 @@ fn emit_decoder(def: &Definition) -> syn::Result<TokenStream> {
         Definition::Struct(s) => node::emit_struct(s),
         Definition::TupleStruct(_) => todo!("decode tuple struct"),
         Definition::UnitStruct(_) => todo!("decode unit struct"),
-        Definition::Enum(_) => todo!("decode enum"),
+        Definition::Enum(e) => variants::emit_enum(e),
     }
 }
 
