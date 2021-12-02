@@ -52,14 +52,32 @@ enum Variant {
     Prop1(Prop1),
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Child {
+    #[knuffel(child)]
+    main: Prop1,
+    #[knuffel(child)]
+    extra: Option<Prop1>,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
 }
 
+fn parse_doc<T: Decode<Span>>(text: &str) -> T {
+    let doc = raw_parse(text).unwrap();
+    T::decode_children(&doc.nodes).unwrap()
+}
+
 fn parse_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap_err().to_string()
+}
+
+fn parse_doc_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
+    let doc = raw_parse(text).unwrap();
+    T::decode_children(&doc.nodes).unwrap_err().to_string()
 }
 
 #[test]
@@ -126,6 +144,53 @@ fn parse_children() {
                ]} );
     assert_eq!(parse::<Children>(r#"parent"#),
                Children { children: Vec::new() } );
+
+    assert_eq!(parse_doc::<Children>(r#"- "val1"; - "val2""#),
+               Children { children: vec! [
+                   Arg1 { name: "val1".into() },
+                   Arg1 { name: "val2".into() },
+               ]} );
+    assert_eq!(parse_doc::<Children>(r#""#),
+               Children { children: Vec::new() } );
+}
+
+#[test]
+fn parse_child() {
+    assert_eq!(parse::<Child>(r#"parent { main label="val1"; }"#),
+               Child {
+                   main: Prop1 { label: "val1".into() },
+                   extra: None,
+               });
+    assert_eq!(parse::<Child>(r#"parent {
+                    main label="primary";
+                    extra label="replica";
+                 }"#),
+               Child {
+                   main: Prop1 { label: "primary".into() },
+                   extra: Some(Prop1 { label: "replica".into() }),
+               });
+    assert_eq!(parse_err::<Child>(r#"parent { something; }"#),
+               "9..19: unexpected node `something`");
+    assert_eq!(parse_err::<Child>(r#"parent"#),
+               "0..6: child node `main` is required");
+
+    assert_eq!(parse_doc::<Child>(r#"main label="val1""#),
+               Child {
+                   main: Prop1 { label: "val1".into() },
+                   extra: None,
+               });
+    assert_eq!(parse_doc::<Child>(r#"
+                    main label="primary"
+                    extra label="replica"
+                 "#),
+               Child {
+                   main: Prop1 { label: "primary".into() },
+                   extra: Some(Prop1 { label: "replica".into() }),
+               });
+    assert_eq!(parse_doc_err::<Child>(r#"something"#),
+               "0..9: unexpected node `something`");
+    assert_eq!(parse_doc_err::<Child>(r#""#),
+               "child node `main` is required");
 }
 
 #[test]

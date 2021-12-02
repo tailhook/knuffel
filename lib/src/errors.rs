@@ -74,6 +74,12 @@ impl<S: Clone> Error<S>  {
             }
         }
     }
+    pub fn ensure_span(mut self, span: &S) -> Error<S> {
+        if self.span.is_none() {
+            self.span = Some(span.clone());
+        }
+        self
+    }
     pub fn from_err<E>(span: &S, err: E) -> Error<S>
         where E: std::error::Error + Send + Sync + 'static,
     {

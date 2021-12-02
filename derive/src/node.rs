@@ -23,6 +23,7 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
                     let #children = #node.children.as_ref()
                         .map(|lst| &lst[..]).unwrap_or(&[]);
                     Self::decode_children(#children)
+                        .map_err(|e| e.ensure_span(#node.span()))
                 }
                 fn decode_children(#children: &[::knuffel::ast::SpannedNode<S>])
                     -> Result<Self, ::knuffel::Error<S>>
@@ -169,25 +170,83 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
 fn decode_children(s: &Struct, children: &syn::Ident)
     -> syn::Result<TokenStream>
 {
-    let mut decoder = Vec::new();
-    let iter_children = syn::Ident::new("iter_children", Span::mixed_site());
-    decoder.push(quote! {
-        let mut #iter_children = #children.iter();
-    });
-    if let Some(children) = &s.children {
-        let fld = &children.field;
-        decoder.push(quote! {
-            let #fld = #iter_children
-                .map(|v| ::knuffel::Decode::decode_node(v))
-                .collect::<Result<_, _>>()?;
+    let mut declare_empty = Vec::new();
+    let mut match_branches = Vec::new();
+    let mut postprocess = Vec::new();
+
+    let child = syn::Ident::new("child", Span::mixed_site());
+    let name_str = syn::Ident::new("name_str", Span::mixed_site());
+
+    for child_def in &s.children {
+        let fld = &child_def.field;
+        let child_name = &child_def.name;
+        declare_empty.push(quote! {
+            let mut #fld = None;
         });
-    } else {
-        decoder.push(quote! {
-            if let Some(val) = #iter_children.next() {
-                return Err(::knuffel::Error::new(val.span(),
-                                                 "unexpected child node"));
+        let dup_err = format!("duplicate node `{}`, single node expected",
+                              child_name.escape_default());
+        match_branches.push(quote! {
+            #child_name => {
+                if #fld.is_some() {
+                    Some(Err(::knuffel::Error::new(#child.node_name.span(),
+                                                   #dup_err)))
+
+                } else {
+                    match ::knuffel::Decode::decode_node(#child) {
+                        Ok(#child) => {
+                            #fld = Some(#child);
+                            None
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                }
             }
         });
+        let req_msg = format!("child node `{}` is required", child_name);
+        if !child_def.option {
+            postprocess.push(quote! {
+                let #fld = #fld.ok_or_else(|| {
+                    ::knuffel::Error::new_global(#req_msg)
+                })?;
+            });
+        }
     }
-    Ok(quote! { #(#decoder)* })
+    if let Some(var_children) = &s.var_children {
+        let fld = &var_children.field;
+        match_branches.push(quote! {
+            _ => {
+                match ::knuffel::Decode::decode_node(#child) {
+                    Ok(#child) => Some(Ok(#child)),
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        });
+        Ok(quote! {
+            #(#declare_empty)*
+            let #fld = #children.iter().flat_map(|#child| {
+                match &**#child.node_name {
+                    #(#match_branches)*
+                }
+            }).collect::<Result<_, ::knuffel::Error<_>>>()?;
+            #(#postprocess)*
+        })
+    } else {
+        match_branches.push(quote! {
+            #name_str => {
+                return Some(Err(::knuffel::Error::new(#child.span(),
+                    format!("unexpected node `{}`",
+                            #name_str.escape_default()))));
+            }
+        });
+
+        Ok(quote! {
+            #(#declare_empty)*
+            #children.iter().flat_map(|#child| {
+                match &**#child.node_name {
+                    #(#match_branches)*
+                }
+            }).collect::<Result<(), ::knuffel::Error<_>>>()?;
+            #(#postprocess)*
+        })
+    }
 }

@@ -21,6 +21,7 @@ pub enum FieldMode {
     Arguments,
     Properties,
     Children,
+    Child,
 }
 
 #[derive(Debug)]
@@ -58,6 +59,12 @@ pub struct VarProps {
     pub field: syn::Ident,
 }
 
+pub struct Child {
+    pub field: syn::Ident,
+    pub name: String,
+    pub option: bool,
+}
+
 pub struct VarChildren {
     pub field: syn::Ident,
 }
@@ -87,6 +94,7 @@ pub struct TupleStruct {
     pub arguments: Vec<TupleArg>,
 }
 
+
 pub struct Struct {
     pub ident: syn::Ident,
     pub generics: syn::Generics,
@@ -95,7 +103,8 @@ pub struct Struct {
     pub properties: Vec<Prop>,
     pub var_props: Option<VarProps>,
     pub children_only: bool,
-    pub children: Option<VarChildren>,
+    pub children: Vec<Child>,
+    pub var_children: Option<VarChildren>,
     pub extra_fields: Vec<ExtraField>,
 }
 
@@ -210,7 +219,8 @@ impl Struct {
         let mut var_args = None::<VarArgs>;
         let mut properties = Vec::new();
         let mut var_props = None::<VarProps>;
-        let mut children = None::<VarChildren>;
+        let mut children = Vec::new();
+        let mut var_children = None::<VarChildren>;
         let mut extra_fields = Vec::new();
         for fld in fields {
             let mut attrs = FieldAttrs::new();
@@ -266,13 +276,28 @@ impl Struct {
                         field: fld.ident.unwrap(),
                     });
                 }
+                Some(FieldMode::Child) => {
+                    if let Some(prev) = var_children {
+                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
+                            "extra `child` after capture all `children`",
+                            "capture all `children` is defined here"));
+                    }
+                    let ident = fld.ident.unwrap();
+                    let name = heck::KebabCase::to_kebab_case(
+                        &ident.to_string()[..]);
+                    children.push(Child {
+                        name,
+                        field: ident,
+                        option: is_option(&fld.ty),
+                    });
+                }
                 Some(FieldMode::Children) => {
-                    if let Some(prev) = children {
+                    if let Some(prev) = var_children {
                         return Err(err_pair(fld.ident.unwrap(), &prev.field,
                             "only single catch all `children` is allowed",
                             "previous `children` is defined here"));
                     }
-                    children = Some(VarChildren {
+                    var_children = Some(VarChildren {
                         field: fld.ident.unwrap(),
                     });
                 }
@@ -295,6 +320,7 @@ impl Struct {
             properties,
             var_props,
             children,
+            var_children,
             extra_fields,
         })
     }
@@ -305,6 +331,7 @@ impl Struct {
         res.extend(self.properties.iter().map(|p| &p.field));
         res.extend(self.var_props.iter().map(|p| &p.field));
         res.extend(self.children.iter().map(|c| &c.field));
+        res.extend(self.var_children.iter().map(|c| &c.field));
         res.extend(self.extra_fields.iter().map(|f| &f.ident));
         return res;
     }
@@ -390,6 +417,9 @@ impl Attr {
         } else if lookahead.peek(kw::children) {
             let _kw: kw::children = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Children))
+        } else if lookahead.peek(kw::child) {
+            let _kw: kw::child = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Child))
         } else {
             Err(lookahead.error())
         }
