@@ -1,5 +1,6 @@
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
+use proc_macro2::Span;
 
 use crate::kw;
 
@@ -14,7 +15,7 @@ pub enum ArgKind {
     Value { option: bool },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FieldMode {
     Argument,
     Property,
@@ -27,11 +28,13 @@ pub enum FieldMode {
 #[derive(Debug)]
 pub enum Attr {
     FieldMode(FieldMode),
+    Unwrap(FieldAttrs),
 }
 
-#[derive(Debug)]
-struct FieldAttrs {
-    mode: Option<FieldMode>,
+#[derive(Debug, Clone)]
+pub struct FieldAttrs {
+    pub mode: Option<FieldMode>,
+    pub unwrap: Option<Box<FieldAttrs>>,
 }
 
 pub enum Kind {
@@ -63,6 +66,7 @@ pub struct Child {
     pub field: syn::Ident,
     pub name: String,
     pub option: bool,
+    pub unwrap: Option<FieldAttrs>,
 }
 
 pub struct VarChildren {
@@ -103,6 +107,18 @@ pub struct Struct {
     pub properties: Vec<Prop>,
     pub var_props: Option<VarProps>,
     pub children_only: bool,
+    pub children: Vec<Child>,
+    pub var_children: Option<VarChildren>,
+    pub extra_fields: Vec<ExtraField>,
+}
+
+pub struct StructBuilder {
+    pub ident: syn::Ident,
+    pub generics: syn::Generics,
+    pub arguments: Vec<Arg>,
+    pub var_args: Option<VarArgs>,
+    pub properties: Vec<Prop>,
+    pub var_props: Option<VarProps>,
     pub children: Vec<Child>,
     pub var_children: Option<VarChildren>,
     pub extra_fields: Vec<ExtraField>,
@@ -209,19 +225,128 @@ impl Enum {
     }
 }
 
+impl StructBuilder {
+    pub fn new(ident: syn::Ident, generics: syn::Generics) -> Self {
+        StructBuilder {
+            ident,
+            generics,
+            arguments: Vec::new(),
+            var_args: None::<VarArgs>,
+            properties: Vec::new(),
+            var_props: None::<VarProps>,
+            children: Vec::new(),
+            var_children: None::<VarChildren>,
+            extra_fields: Vec::new(),
+        }
+    }
+    pub fn build(self) -> Struct {
+        Struct {
+            ident: self.ident,
+            generics: self.generics,
+            children_only:
+                self.arguments.is_empty() &&
+                self.properties.is_empty() &&
+                self.var_args.is_none() &&
+                self.var_props.is_none(),
+            arguments: self.arguments,
+            var_args: self.var_args,
+            properties: self.properties,
+            var_props: self.var_props,
+            children: self.children,
+            var_children: self.var_children,
+            extra_fields: self.extra_fields,
+        }
+    }
+    pub fn add_field(&mut self, ident: syn::Ident, is_option: bool,
+                     attrs: &FieldAttrs)
+        -> syn::Result<&mut Self>
+    {
+        match attrs.mode {
+            Some(FieldMode::Argument) => {
+                if let Some(prev) = &self.var_args {
+                    return Err(err_pair(ident, &prev.field,
+                        "extra `argument` after capture all `arguments`",
+                        "capture all `arguments` is defined here"));
+                }
+                self.arguments.push(Arg {
+                    field: ident,
+                    kind: ArgKind::Value { option: is_option },
+                });
+            }
+            Some(FieldMode::Arguments) => {
+                if let Some(prev) = &self.var_args {
+                    return Err(err_pair(ident, &prev.field,
+                        "only single `arguments` allowed",
+                        "previous `arguments` is defined here"));
+                }
+                self.var_args = Some(VarArgs {
+                    field: ident,
+                });
+            }
+            Some(FieldMode::Property) => {
+                if let Some(prev) = &self.var_props {
+                    return Err(err_pair(ident, &prev.field,
+                        "extra `property` after capture all `properties`",
+                        "capture all `properties` is defined here"));
+                }
+                self.properties.push(Prop {
+                    field: ident,
+                    option: is_option,
+                });
+            }
+            Some(FieldMode::Properties) => {
+                if let Some(prev) = &self.var_props {
+                    return Err(err_pair(ident, &prev.field,
+                        "only single `properties` is allowed",
+                        "previous `properties` is defined here"));
+                }
+                self.var_props = Some(VarProps {
+                    field: ident,
+                });
+            }
+            Some(FieldMode::Child) => {
+                if let Some(prev) = &self.var_children {
+                    return Err(err_pair(ident, &prev.field,
+                        "extra `child` after capture all `children`",
+                        "capture all `children` is defined here"));
+                }
+                let name = heck::KebabCase::to_kebab_case(
+                    &ident.to_string()[..]);
+                self.children.push(Child {
+                    name,
+                    field: ident,
+                    option: is_option,
+                    unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
+                });
+            }
+            Some(FieldMode::Children) => {
+                if let Some(prev) = &self.var_children {
+                    return Err(err_pair(ident, &prev.field,
+                        "only single catch all `children` is allowed",
+                        "previous `children` is defined here"));
+                }
+                self.var_children = Some(VarChildren {
+                    field: ident,
+                });
+            }
+            None => {
+                self.extra_fields.push(ExtraField {
+                    ident,
+                    kind: ExtraKind::Default,
+                });
+            }
+        }
+        return Ok(self);
+    }
+}
+
 impl Struct {
     fn new(ident: syn::Ident, generics: syn::Generics,
            _attrs: Vec<syn::Attribute>,
            fields: impl Iterator<Item=syn::Field>)
         -> syn::Result<Self>
     {
-        let mut arguments = Vec::new();
-        let mut var_args = None::<VarArgs>;
-        let mut properties = Vec::new();
-        let mut var_props = None::<VarProps>;
-        let mut children = Vec::new();
-        let mut var_children = None::<VarChildren>;
-        let mut extra_fields = Vec::new();
+        let mut bld = StructBuilder::new(ident, generics);
         for fld in fields {
             let mut attrs = FieldAttrs::new();
             for attr in fld.attrs {
@@ -230,99 +355,13 @@ impl Struct {
 
                 {
                     let chunk = attr.parse_args_with(parse_field_attrs)?;
-                    attrs.update(chunk);
+                    attrs.update(chunk)?;
                 }
             }
-            match attrs.mode {
-                Some(FieldMode::Argument) => {
-                    if let Some(prev) = var_args {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "extra `argument` after capture all `arguments`",
-                            "capture all `arguments` is defined here"));
-                    }
-                    arguments.push(Arg {
-                        field: fld.ident.unwrap(),
-                        kind: ArgKind::Value { option: is_option(&fld.ty) },
-                    });
-                }
-                Some(FieldMode::Arguments) => {
-                    if let Some(prev) = var_args {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "only single `arguments` allowed",
-                            "previous `arguments` is defined here"));
-                    }
-                    var_args = Some(VarArgs {
-                        field: fld.ident.unwrap(),
-                    });
-                }
-                Some(FieldMode::Property) => {
-                    if let Some(prev) = var_props {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "extra `property` after capture all `properties`",
-                            "capture all `properties` is defined here"));
-                    }
-                    properties.push(Prop {
-                        field: fld.ident.unwrap(),
-                        option: is_option(&fld.ty),
-                    });
-                }
-                Some(FieldMode::Properties) => {
-                    if let Some(prev) = var_props {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "only single `properties` is allowed",
-                            "previous `properties` is defined here"));
-                    }
-                    var_props = Some(VarProps {
-                        field: fld.ident.unwrap(),
-                    });
-                }
-                Some(FieldMode::Child) => {
-                    if let Some(prev) = var_children {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "extra `child` after capture all `children`",
-                            "capture all `children` is defined here"));
-                    }
-                    let ident = fld.ident.unwrap();
-                    let name = heck::KebabCase::to_kebab_case(
-                        &ident.to_string()[..]);
-                    children.push(Child {
-                        name,
-                        field: ident,
-                        option: is_option(&fld.ty),
-                    });
-                }
-                Some(FieldMode::Children) => {
-                    if let Some(prev) = var_children {
-                        return Err(err_pair(fld.ident.unwrap(), &prev.field,
-                            "only single catch all `children` is allowed",
-                            "previous `children` is defined here"));
-                    }
-                    var_children = Some(VarChildren {
-                        field: fld.ident.unwrap(),
-                    });
-                }
-                None => {
-                    extra_fields.push(ExtraField {
-                        ident: fld.ident.unwrap(),
-                        kind: ExtraKind::Default,
-                    });
-                }
-            }
+            bld.add_field(fld.ident.unwrap(), is_option(&fld.ty), &attrs)?;
         }
 
-        Ok(Struct {
-            ident,
-            generics,
-            children_only: arguments.is_empty() && properties.is_empty() &&
-                var_args.is_none() && var_props.is_none(),
-            arguments,
-            var_args,
-            properties,
-            var_props,
-            children,
-            var_children,
-            extra_fields,
-        })
+        Ok(bld.build())
     }
     pub fn all_fields(&self) -> Vec<&syn::Ident> {
         let mut res = Vec::new();
@@ -379,28 +418,49 @@ impl FieldAttrs {
     fn new() -> FieldAttrs {
         FieldAttrs {
             mode: None,
+            unwrap: None,
         }
     }
-    fn update(&mut self, attrs: impl IntoIterator<Item=Attr>) {
+    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
+        -> syn::Result<()>
+    {
         use Attr::*;
 
-        for attr in attrs {
+        for (attr, span) in attrs {
             match attr {
-                FieldMode(mode) => self.mode = Some(mode),
+                FieldMode(mode) => {
+                    if self.mode.is_some() {
+                        return Err(syn::Error::new(span,
+                            "only single attribute that defines mode of the \
+                            field is allowed. Perhaps you mean `unwrap`?"));
+                    }
+                    self.mode = Some(mode);
+                }
+                Unwrap(val) => {
+                    if self.unwrap.is_some() {
+                        return Err(syn::Error::new(span,
+                            "`unwrap` specified twice"));
+                    }
+                    self.unwrap = Some(Box::new(val));
+                }
             }
         }
+        Ok(())
     }
 }
 
 fn parse_field_attrs(input: ParseStream)
-    -> syn::Result<impl IntoIterator<Item=Attr>>
+    -> syn::Result<impl IntoIterator<Item=(Attr, Span)>>
 {
     Punctuated::<_, syn::Token![,]>::parse_terminated_with(
         input, Attr::parse_field)
 }
 
 impl Attr {
-    fn parse_field(input: ParseStream) -> syn::Result<Self> {
+    fn parse_field(input: ParseStream) -> syn::Result<(Self, Span)> {
+        Self::_parse_field(input).map(|a| (a, input.span()))
+    }
+    fn _parse_field(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::argument) {
             let _kw: kw::argument = input.parse()?;
@@ -420,6 +480,14 @@ impl Attr {
         } else if lookahead.peek(kw::child) {
             let _kw: kw::child = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Child))
+        } else if lookahead.peek(kw::unwrap) {
+            let _kw: kw::unwrap = input.parse()?;
+            let parens;
+            syn::parenthesized!(parens in input);
+            let mut attrs = FieldAttrs::new();
+            let chunk = parens.call(parse_field_attrs)?;
+            attrs.update(chunk)?;
+            Ok(Attr::Unwrap(attrs))
         } else {
             Err(lookahead.error())
         }

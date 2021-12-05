@@ -1,7 +1,9 @@
+use std::default::Default;
+
 use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
-use crate::definition::{Struct, ArgKind};
+use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs};
 
 
 pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
@@ -167,6 +169,35 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     })
 }
 
+fn unwrap_fn(func: &syn::Ident,
+             name: &syn::Ident, is_option: bool, attrs: &FieldAttrs)
+    -> syn::Result<TokenStream>
+{
+    let mut bld = StructBuilder::new(
+        syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
+        Default::default(),
+    );
+    bld.add_field(name.clone(), is_option, attrs)?;
+    let s = bld.build();
+
+    let node = syn::Ident::new("node", Span::mixed_site());
+    let children = syn::Ident::new("children", Span::mixed_site());
+    let decode_args = decode_args(&s, &node)?;
+    let decode_props = decode_props(&s, &node)?;
+    let decode_children = decode_children(&s, &children)?;
+    Ok(quote! {
+        let #func = |#node: &::knuffel::ast::SpannedNode<S>| {
+            #decode_args
+            #decode_props
+            let #children = #node.children.as_ref()
+                .map(|lst| &lst[..]).unwrap_or(&[]);
+            #decode_children
+
+            Ok(#name)
+        };
+    })
+}
+
 fn decode_children(s: &Struct, children: &syn::Ident)
     -> syn::Result<TokenStream>
 {
@@ -185,20 +216,38 @@ fn decode_children(s: &Struct, children: &syn::Ident)
         });
         let dup_err = format!("duplicate node `{}`, single node expected",
                               child_name.escape_default());
+        let decode = if let Some(inner) = child_def.unwrap.as_ref() {
+            let func = syn::Ident::new(&format!("unwrap_{}", fld),
+                                       Span::mixed_site());
+            let unwrap_fn = unwrap_fn(&func, fld, child_def.option, inner)?;
+            quote! {
+                #unwrap_fn
+                match #func(#child) {
+                    Ok(#child) => {
+                        #fld = Some(#child);
+                        None
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        } else {
+            quote! {
+                match ::knuffel::Decode::decode_node(#child) {
+                    Ok(#child) => {
+                        #fld = Some(#child);
+                        None
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        };
         match_branches.push(quote! {
             #child_name => {
                 if #fld.is_some() {
                     Some(Err(::knuffel::Error::new(#child.node_name.span(),
                                                    #dup_err)))
-
                 } else {
-                    match ::knuffel::Decode::decode_node(#child) {
-                        Ok(#child) => {
-                            #fld = Some(#child);
-                            None
-                        }
-                        Err(e) => Some(Err(e)),
-                    }
+                    #decode
                 }
             }
         });

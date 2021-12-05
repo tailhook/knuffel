@@ -60,6 +60,12 @@ struct Child {
     extra: Option<Prop1>,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Unwrap {
+    #[knuffel(child, unwrap(argument))]
+    label: String,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -106,6 +112,18 @@ fn parse_prop() {
         "19..20: unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
         "0..4: property `label` is required");
+}
+
+#[test]
+fn parse_unwrap() {
+    assert_eq!(parse::<Unwrap>(r#"node { label "hello"; }"#),
+               Unwrap { label: "hello".into() } );
+    assert_eq!(parse_err::<Unwrap>(r#"node label="hello""#),
+        "5..10: unexpected property `label`");
+    assert_eq!(parse_err::<Unwrap>(r#"node"#),
+        "0..4: child node `label` is required");
+    assert_eq!(parse_doc::<Unwrap>(r#"label "hello""#),
+               Unwrap { label: "hello".into() } );
 }
 
 #[test]
