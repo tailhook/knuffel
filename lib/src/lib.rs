@@ -7,6 +7,9 @@ pub mod errors;
 pub mod span;
 pub mod traits;
 
+#[cfg(feature="derive")]
+pub use knuffel_derive::Decode;
+
 pub use wrappers::raw_parse;
 pub use traits::Decode;
 pub use errors::Error;

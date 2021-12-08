@@ -75,17 +75,21 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         match arg.kind {
             ArgKind::Value { option: true } => {
                 decoder.push(quote! {
-                    let #fld = #iter_args.next()
-                        .map(|v| v.try_into()).transpose()?;
+                    let #fld = #iter_args.next().map(|v| {
+                        ::knuffel::traits::DecodeTypedScalar::decode(v)
+                    }).transpose()?;
                 });
             }
             ArgKind::Value { option: false } => {
                 let error = format!("additional argument `{}` is required",
                                     fld);
                 decoder.push(quote! {
-                    let #fld = #iter_args.next().ok_or_else(|| {
-                        ::knuffel::Error::new(#node.node_name.span(), #error)
-                    })?.try_into()?;
+                    let #fld = ::knuffel::traits::DecodeTypedScalar::decode(
+                        #iter_args.next().ok_or_else(|| {
+                            ::knuffel::Error::new(
+                                #node.node_name.span(), #error)
+                        })?
+                    )?;
                 });
             }
         }
@@ -93,8 +97,9 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     if let Some(var_args) = &s.var_args {
         let fld = &var_args.field;
         decoder.push(quote! {
-            let #fld = #iter_args.map(|v| v.try_into())
-                .collect::<Result<_, _>>()?;
+            let #fld = #iter_args.map(|v| {
+                ::knuffel::traits::DecodeTypedScalar::decode(v)
+            }).collect::<Result<_, _>>()?;
         });
     } else {
         decoder.push(quote! {
@@ -123,7 +128,9 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             let mut #fld = None;
         });
         match_branches.push(quote! {
-            #prop_name => #fld = Some(#val.try_into()?),
+            #prop_name => #fld = Some(
+                ::knuffel::traits::DecodeTypedScalar::decode(#val)?
+            ),
         });
         let req_msg = format!("property `{}` is required", prop_name);
         if !prop.option {
@@ -143,7 +150,10 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             #name_str => {
                 let converted_name = #name_str.parse()
                     .map_err(|e| ::knuffel::Error::from_err(#name.span(), e))?;
-                #fld.push((converted_name, #val.try_into()?));
+                #fld.push((
+                    converted_name,
+                    ::knuffel::traits::DecodeTypedScalar::decode(#val)?
+                ));
             }
         });
         postprocess.push(quote! {
