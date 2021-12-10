@@ -53,10 +53,8 @@ impl<S: Span> DecodeScalar<S> for String {
 impl<S: Span> DecodeTypedScalar<S> for String {
     fn decode(val: &Value<S>) -> Result<String, Error<S>> {
         if let Some(typ) = &val.type_name {
-            if typ.as_str() != "str" {
-                return Err(Error::new(typ.span(),
-                    format!("expected type `str`, found `{}`", typ.as_str())));
-            }
+            return Err(Error::new(typ.span(),
+                format!("unexpected type name for String")));
         }
         DecodeScalar::decode(&val.literal)
     }
@@ -76,6 +74,25 @@ impl<S: Span> DecodeTypedScalar<S> for PathBuf {
         if let Some(typ) = &val.type_name {
             return Err(Error::new(typ.span(),
                 format!("unexpected type name for PathBuf")));
+        }
+        DecodeScalar::decode(&val.literal)
+    }
+}
+
+impl<S: Span> DecodeScalar<S> for bool {
+    fn decode(val: &Spanned<Literal, S>) -> Result<bool, Error<S>> {
+        match &**val {
+            Literal::Bool(value) => Ok(*value),
+            _ => Err(Error::new(val.span(), "expected integer value")),
+        }
+    }
+}
+
+impl<S: Span> DecodeTypedScalar<S> for bool {
+    fn decode(val: &Value<S>) -> Result<bool, Error<S>> {
+        if let Some(typ) = &val.type_name {
+            return Err(Error::new(typ.span(),
+                format!("unexpected type name for bool")));
         }
         DecodeScalar::decode(&val.literal)
     }

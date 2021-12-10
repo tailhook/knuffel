@@ -11,6 +11,8 @@ struct Scalars {
     u64: u64,
     #[knuffel(child, unwrap(argument))]
     path: PathBuf,
+    #[knuffel(child, unwrap(argument))]
+    boolean: bool,
 }
 
 fn parse<T: Decode<Span>>(text: &str) -> T {
@@ -26,10 +28,12 @@ fn parse_enum() {
             str "hello"
             u64 1234
             path "/hello/world"
+            boolean true
         "#),
         Scalars {
             str: "hello".into(),
             u64: 1234,
             path: PathBuf::from("/hello/world"),
+            boolean: true,
         });
 }
