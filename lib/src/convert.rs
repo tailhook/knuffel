@@ -1,4 +1,6 @@
 use std::str::FromStr;
+use std::path::PathBuf;
+
 use crate::ast::{Value, Literal, Integer, Radix};
 use crate::span::{Spanned};
 use crate::errors::{Error, ResultExt};
@@ -55,6 +57,25 @@ impl<S: Span> DecodeTypedScalar<S> for String {
                 return Err(Error::new(typ.span(),
                     format!("expected type `str`, found `{}`", typ.as_str())));
             }
+        }
+        DecodeScalar::decode(&val.literal)
+    }
+}
+
+impl<S: Span> DecodeScalar<S> for PathBuf {
+    fn decode(val: &Spanned<Literal, S>) -> Result<PathBuf, Error<S>> {
+        match &**val {
+            Literal::String(ref s) => Ok(String::from(s.clone()).into()),
+            _ => Err(Error::new(val.span(), "expected string value")),
+        }
+    }
+}
+
+impl<S: Span> DecodeTypedScalar<S> for PathBuf {
+    fn decode(val: &Value<S>) -> Result<PathBuf, Error<S>> {
+        if let Some(typ) = &val.type_name {
+            return Err(Error::new(typ.span(),
+                format!("unexpected type name for PathBuf")));
         }
         DecodeScalar::decode(&val.literal)
     }

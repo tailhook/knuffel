@@ -31,7 +31,7 @@ struct Prop1 {
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct OptProp {
     #[knuffel(property)]
-    label: Option<String>,
+label: Option<String>,
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
