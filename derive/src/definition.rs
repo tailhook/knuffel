@@ -27,6 +27,7 @@ pub enum FieldMode {
 
 #[derive(Debug)]
 pub enum Attr {
+    Skip,
     FieldMode(FieldMode),
     Unwrap(FieldAttrs),
 }
@@ -35,6 +36,11 @@ pub enum Attr {
 pub struct FieldAttrs {
     pub mode: Option<FieldMode>,
     pub unwrap: Option<Box<FieldAttrs>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantAttrs {
+    pub skip: bool,
 }
 
 pub enum Kind {
@@ -179,7 +185,7 @@ fn is_option(ty: &syn::Type) -> bool {
 }
 
 impl Variant {
-    fn new(ident: syn::Ident, _attrs: Vec<syn::Attribute>) -> syn::Result<Self>
+    fn new(ident: syn::Ident, _attrs: VariantAttrs) -> syn::Result<Self>
     {
         let name = heck::KebabCase::to_kebab_case(&ident.to_string()[..]);
         Ok(Variant {
@@ -197,6 +203,19 @@ impl Enum {
     {
         let mut variants = Vec::new();
         for var in src_variants {
+            let mut attrs = VariantAttrs::new();
+            for attr in var.attrs {
+                if matches!(attr.style, syn::AttrStyle::Outer) &&
+                    attr.path.is_ident("knuffel")
+
+                {
+                    let chunk = attr.parse_args_with(parse_attrs)?;
+                    attrs.update(chunk)?;
+                }
+            }
+            if attrs.skip {
+                continue;
+            }
             match var.fields {
                 syn::Fields::Named(n) => {
                     return Err(syn::Error::new_spanned(n,
@@ -207,9 +226,7 @@ impl Enum {
                         return Err(syn::Error::new_spanned(u,
                             "single field expected"));
                     }
-                    variants.push(
-                        Variant::new(var.ident, var.attrs)?
-                    );
+                    variants.push(Variant::new(var.ident, attrs)?);
                 }
                 syn::Fields::Unit => {
                     return Err(syn::Error::new_spanned(var.ident,
@@ -354,7 +371,7 @@ impl Struct {
                     attr.path.is_ident("knuffel")
 
                 {
-                    let chunk = attr.parse_args_with(parse_field_attrs)?;
+                    let chunk = attr.parse_args_with(parse_attrs)?;
                     attrs.update(chunk)?;
                 }
             }
@@ -443,24 +460,48 @@ impl FieldAttrs {
                     }
                     self.unwrap = Some(Box::new(val));
                 }
+                _ => return Err(syn::Error::new(span,
+                    "this attribute is not supported on fields")),
             }
         }
         Ok(())
     }
 }
 
-fn parse_field_attrs(input: ParseStream)
+impl VariantAttrs {
+    fn new() -> VariantAttrs {
+        VariantAttrs {
+            skip: false,
+        }
+    }
+    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
+        -> syn::Result<()>
+    {
+        use Attr::*;
+
+        for (attr, span) in attrs {
+            match attr {
+                Skip => self.skip = true,
+                _ => return Err(syn::Error::new(span,
+                    "this attribute is not supported on enum variants")),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_attrs(input: ParseStream)
     -> syn::Result<impl IntoIterator<Item=(Attr, Span)>>
 {
     Punctuated::<_, syn::Token![,]>::parse_terminated_with(
-        input, Attr::parse_field)
+        input, Attr::parse)
 }
 
 impl Attr {
-    fn parse_field(input: ParseStream) -> syn::Result<(Self, Span)> {
-        Self::_parse_field(input).map(|a| (a, input.span()))
+    fn parse(input: ParseStream) -> syn::Result<(Self, Span)> {
+        Self::_parse(input).map(|a| (a, input.span()))
     }
-    fn _parse_field(input: ParseStream) -> syn::Result<Self> {
+    fn _parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
         if lookahead.peek(kw::argument) {
             let _kw: kw::argument = input.parse()?;
@@ -485,9 +526,12 @@ impl Attr {
             let parens;
             syn::parenthesized!(parens in input);
             let mut attrs = FieldAttrs::new();
-            let chunk = parens.call(parse_field_attrs)?;
+            let chunk = parens.call(parse_attrs)?;
             attrs.update(chunk)?;
             Ok(Attr::Unwrap(attrs))
+        } else if lookahead.peek(kw::skip) {
+            let _kw: kw::skip = input.parse()?;
+            Ok(Attr::Skip)
         } else {
             Err(lookahead.error())
         }

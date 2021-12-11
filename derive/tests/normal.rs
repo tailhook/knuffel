@@ -50,6 +50,9 @@ struct Children {
 enum Variant {
     Arg1(Arg1),
     Prop1(Prop1),
+    #[knuffel(skip)]
+    #[allow(dead_code)]
+    Var3(u32),
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
