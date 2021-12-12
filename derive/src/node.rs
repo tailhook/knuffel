@@ -3,7 +3,7 @@ use std::default::Default;
 use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
-use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs};
+use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
 
 
 pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
@@ -64,6 +64,36 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
     }
 }
 
+fn decode_value(val: &syn::Ident, mode: &DecodeMode)
+    -> syn::Result<TokenStream>
+{
+    match mode {
+        DecodeMode::Normal => {
+            Ok(quote!{
+                ::knuffel::traits::DecodeScalar::decode(#val)
+            })
+        }
+        DecodeMode::Str => {
+            Ok(quote! {
+                if let Some(typ) = &#val.type_name {
+                    Err(::knuffel::Error::new(typ.span(),
+                        format!("no type name expected")))
+                } else {
+                    match *#val.literal {
+                        ::knuffel::ast::Literal::String(ref s) => {
+                            ::std::str::FromStr::from_str(s)
+                                .map_err(|e| ::knuffel::Error::from_err(
+                                    #val.literal.span(), e))
+                        }
+                        _ => Err(::knuffel::Error::new(#val.literal.span(),
+                                            "expected string value")),
+                    }
+                }
+            })
+        }
+    }
+}
+
 fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     let mut decoder = Vec::new();
     let iter_args = syn::Ident::new("iter_args", Span::mixed_site());
@@ -72,11 +102,13 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     });
     for arg in &s.arguments {
         let fld = &arg.field;
+        let val = syn::Ident::new("val", Span::mixed_site());
+        let decode_value = decode_value(&val, &arg.decode)?;
         match arg.kind {
             ArgKind::Value { option: true } => {
                 decoder.push(quote! {
-                    let #fld = #iter_args.next().map(|v| {
-                        ::knuffel::traits::DecodeTypedScalar::decode(v)
+                    let #fld = #iter_args.next().map(|#val| {
+                        #decode_value
                     }).transpose()?;
                 });
             }
@@ -84,21 +116,23 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                 let error = format!("additional argument `{}` is required",
                                     fld);
                 decoder.push(quote! {
-                    let #fld = ::knuffel::traits::DecodeTypedScalar::decode(
+                    let #val =
                         #iter_args.next().ok_or_else(|| {
                             ::knuffel::Error::new(
                                 #node.node_name.span(), #error)
-                        })?
-                    )?;
+                        })?;
+                    let #fld = #decode_value?;
                 });
             }
         }
     }
     if let Some(var_args) = &s.var_args {
         let fld = &var_args.field;
+        let val = syn::Ident::new("val", Span::mixed_site());
+        let decode_value = decode_value(&val, &var_args.decode)?;
         decoder.push(quote! {
-            let #fld = #iter_args.map(|v| {
-                ::knuffel::traits::DecodeTypedScalar::decode(v)
+            let #fld = #iter_args.map(|#val| {
+                #decode_value
             }).collect::<Result<_, _>>()?;
         });
     } else {
@@ -124,13 +158,12 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     for prop in &s.properties {
         let fld = &prop.field;
         let prop_name = prop.name();
+        let decode_value = decode_value(&val, &prop.decode)?;
         declare_empty.push(quote! {
             let mut #fld = None;
         });
         match_branches.push(quote! {
-            #prop_name => #fld = Some(
-                ::knuffel::traits::DecodeTypedScalar::decode(#val)?
-            ),
+            #prop_name => #fld = Some(#decode_value?),
         });
         let req_msg = format!("property `{}` is required", prop_name);
         if !prop.option {
@@ -143,6 +176,7 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     }
     if let Some(var_props) = &s.var_props {
         let fld = &var_props.field;
+        let decode_value = decode_value(&val, &var_props.decode)?;
         declare_empty.push(quote! {
             let mut #fld = Vec::new();
         });
@@ -152,7 +186,7 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                     .map_err(|e| ::knuffel::Error::from_err(#name.span(), e))?;
                 #fld.push((
                     converted_name,
-                    ::knuffel::traits::DecodeTypedScalar::decode(#val)?
+                    #decode_value?,
                 ));
             }
         });

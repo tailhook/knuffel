@@ -6,3 +6,4 @@ syn::custom_keyword!(properties);
 syn::custom_keyword!(property);
 syn::custom_keyword!(unwrap);
 syn::custom_keyword!(skip);
+syn::custom_keyword!(str);

@@ -69,6 +69,12 @@ struct Unwrap {
     label: String,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Parse {
+    #[knuffel(child, unwrap(argument, str))]
+    listen: std::net::SocketAddr,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -222,4 +228,12 @@ fn parse_enum() {
                Variant::Prop1(Prop1 { label: "hello".into() }));
     assert_eq!(parse_err::<Variant>(r#"something"#),
         "0..9: expected one of `arg1`, `prop1`");
+}
+
+#[test]
+fn parse_str() {
+    assert_eq!(parse_doc::<Parse>(r#"listen "127.0.0.1:8080""#),
+               Parse { listen: "127.0.0.1:8080".parse().unwrap() });
+    assert_eq!(parse_doc_err::<Parse>(r#"listen "2/3""#),
+        "7..12: invalid IP address syntax");
 }
