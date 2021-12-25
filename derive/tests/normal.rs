@@ -2,6 +2,7 @@ use std::fmt;
 use std::collections::BTreeMap;
 
 use knuffel::{Decode, span::Span, raw_parse};
+use knuffel::traits::DecodeChildren;
 
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -31,7 +32,7 @@ struct Prop1 {
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct OptProp {
     #[knuffel(property)]
-label: Option<String>,
+    label: Option<String>,
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -80,7 +81,7 @@ fn parse<T: Decode<Span>>(text: &str) -> T {
     T::decode_node(&doc.nodes[0]).unwrap()
 }
 
-fn parse_doc<T: Decode<Span>>(text: &str) -> T {
+fn parse_doc<T: DecodeChildren<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_children(&doc.nodes).unwrap()
 }
@@ -90,7 +91,7 @@ fn parse_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
     T::decode_node(&doc.nodes[0]).unwrap_err().to_string()
 }
 
-fn parse_doc_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
+fn parse_doc_err<T: DecodeChildren<Span>+fmt::Debug>(text: &str) -> String {
     let doc = raw_parse(text).unwrap();
     T::decode_children(&doc.nodes).unwrap_err().to_string()
 }

@@ -23,6 +23,18 @@ pub enum FieldMode {
     Properties,
     Children,
     Child,
+    Flatten(Flatten),
+}
+
+pub enum FlattenItem {
+    Child,
+    Property,
+}
+
+#[derive(Debug, Clone)]
+pub struct Flatten {
+    child: bool,
+    property: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +85,7 @@ pub struct Prop {
     pub field: syn::Ident,
     pub option: bool,
     pub decode: DecodeMode,
+    pub flatten: bool,
 }
 
 pub struct VarProps {
@@ -85,6 +98,7 @@ pub struct Child {
     pub name: String,
     pub option: bool,
     pub unwrap: Option<FieldAttrs>,
+    pub flatten: bool,
 }
 
 pub struct VarChildren {
@@ -124,7 +138,8 @@ pub struct Struct {
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
     pub var_props: Option<VarProps>,
-    pub children_only: bool,
+    pub has_arguments: bool,
+    pub has_properties: bool,
     pub children: Vec<Child>,
     pub var_children: Option<VarChildren>,
     pub extra_fields: Vec<ExtraField>,
@@ -272,11 +287,10 @@ impl StructBuilder {
         Struct {
             ident: self.ident,
             generics: self.generics,
-            children_only:
-                self.arguments.is_empty() &&
-                self.properties.is_empty() &&
-                self.var_args.is_none() &&
-                self.var_props.is_none(),
+            has_arguments:
+                !self.arguments.is_empty() || self.var_args.is_some(),
+            has_properties:
+                !self.properties.is_empty() || self.var_props.is_some(),
             arguments: self.arguments,
             var_args: self.var_args,
             properties: self.properties,
@@ -290,7 +304,7 @@ impl StructBuilder {
                      attrs: &FieldAttrs)
         -> syn::Result<&mut Self>
     {
-        match attrs.mode {
+        match &attrs.mode {
             Some(FieldMode::Argument) => {
                 if let Some(prev) = &self.var_args {
                     return Err(err_pair(ident, &prev.field,
@@ -324,6 +338,7 @@ impl StructBuilder {
                     field: ident,
                     option: is_option,
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    flatten: false,
                 });
             }
             Some(FieldMode::Properties) => {
@@ -350,6 +365,7 @@ impl StructBuilder {
                     field: ident,
                     option: is_option,
                     unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
+                    flatten: false,
                 });
             }
             Some(FieldMode::Children) => {
@@ -361,6 +377,41 @@ impl StructBuilder {
                 self.var_children = Some(VarChildren {
                     field: ident,
                 });
+            }
+            Some(FieldMode::Flatten(flatten)) => {
+                if is_option {
+                    return Err(syn::Error::new_spanned(ident,
+                        "optional flatten fields are not supported yet"));
+                }
+                if flatten.property {
+                    if let Some(prev) = &self.var_props {
+                        return Err(err_pair(ident, &prev.field,
+                            "extra `flatten(property)` after \
+                            capture all `properties`",
+                            "capture all `properties` is defined here"));
+                    }
+                    self.properties.push(Prop {
+                        field: ident.clone(),
+                        option: is_option,
+                        decode: DecodeMode::Normal,
+                        flatten: true,
+                    });
+                }
+                if flatten.child {
+                    if let Some(prev) = &self.var_children {
+                        return Err(err_pair(ident, &prev.field,
+                            "extra `flatten(child)` after \
+                            capture all `children`",
+                            "capture all `children` is defined here"));
+                    }
+                    self.children.push(Child {
+                        name: "".into(), // unused
+                        field: ident.clone(),
+                        option: is_option,
+                        unwrap: None,
+                        flatten: true,
+                    });
+                }
             }
             None => {
                 self.extra_fields.push(ExtraField {
@@ -561,6 +612,38 @@ impl Attr {
         } else if lookahead.peek(kw::str) {
             let _kw: kw::str = input.parse()?;
             Ok(Attr::DecodeMode(DecodeMode::Str))
+        } else if lookahead.peek(kw::flatten) {
+            let _kw: kw::flatten = input.parse()?;
+            let parens;
+            syn::parenthesized!(parens in input);
+            let items = Punctuated::<FlattenItem, syn::Token![,]>::
+                parse_terminated(&parens)?;
+            let mut flatten = Flatten {
+                child: false,
+                property: false,
+            };
+            for item in items {
+                match item {
+                    FlattenItem::Child => flatten.child = true,
+                    FlattenItem::Property => flatten.property = true,
+                }
+            }
+            Ok(Attr::FieldMode(FieldMode::Flatten(flatten)))
+        } else {
+            Err(lookahead.error())
+        }
+    }
+}
+
+impl Parse for FlattenItem {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::child) {
+            let _kw: kw::child = input.parse()?;
+            Ok(FlattenItem::Child)
+        } else if lookahead.peek(kw::property) {
+            let _kw: kw::property = input.parse()?;
+            Ok(FlattenItem::Property)
         } else {
             Err(lookahead.error())
         }

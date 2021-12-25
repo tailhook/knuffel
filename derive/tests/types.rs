@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use knuffel::{Decode, span::Span, raw_parse};
+use knuffel::{span::Span, raw_parse};
+use knuffel::traits::DecodeChildren;
 
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -15,7 +16,7 @@ struct Scalars {
     boolean: bool,
 }
 
-fn parse<T: Decode<Span>>(text: &str) -> T {
+fn parse<T: DecodeChildren<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_children(&doc.nodes).unwrap()
 }

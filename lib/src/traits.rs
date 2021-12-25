@@ -5,8 +5,17 @@ use crate::errors::Error;
 
 pub trait Decode<S>: Sized {
     fn decode_node(node: &SpannedNode<S>) -> Result<Self, Error<S>>;
+}
+
+pub trait DecodeChildren<S>: Sized {
     fn decode_children(nodes: &[SpannedNode<S>]) -> Result<Self, Error<S>>;
 }
+
+pub trait DecodePartial<S>: Sized {
+    fn insert_child(&mut self, node: &SpannedNode<S>) -> Result<bool, Error<S>>;
+    fn insert_property(&mut self, name: &Spanned<Box<str>, S>, value: &Value<S>)
+        -> Result<bool, Error<S>>;
+} 
 
 pub trait DecodeScalar<S>: Sized {
     fn type_check(type_name: &Option<Spanned<TypeName, S>>)

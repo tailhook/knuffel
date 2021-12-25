@@ -8,18 +8,12 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     let name = &e.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
     let decode = decode(e, &node)?;
-    let err = format!("set of children cannot be parsed into enum {}", name);
     Ok(quote! {
         impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
             fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
                 -> Result<Self, ::knuffel::Error<S>>
             {
                 #decode
-            }
-            fn decode_children(_nodes: &[::knuffel::ast::SpannedNode<S>])
-                -> Result<Self, ::knuffel::Error<S>>
-            {
-                Err(::knuffel::Error::new_global(#err))
             }
         }
     })
