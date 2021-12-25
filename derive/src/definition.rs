@@ -63,13 +63,6 @@ pub struct VariantAttrs {
     pub skip: bool,
 }
 
-pub enum Kind {
-    Int,
-    Decimal,
-    String,
-    Bool,
-}
-
 pub struct Arg {
     pub field: syn::Ident,
     pub kind: ArgKind,
