@@ -11,5 +11,5 @@ pub mod traits;
 pub use knuffel_derive::Decode;
 
 pub use wrappers::raw_parse;
-pub use traits::Decode;
+pub use traits::{Decode, DecodeChildren};
 pub use errors::Error;

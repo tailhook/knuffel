@@ -30,6 +30,7 @@ pub struct Error<S> {
 }
 
 impl<S: fmt::Display + fmt::Debug> std::error::Error for RawError<S> {}
+impl<S: fmt::Display + fmt::Debug> std::error::Error for Error<S> {}
 
 impl<S: fmt::Display> fmt::Display for RawError<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -81,11 +82,11 @@ impl<S: Clone> Error<S>  {
         self
     }
     pub fn from_err<E>(span: &S, err: E) -> Error<S>
-        where E: std::error::Error + Send + Sync + 'static,
+        where E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     {
         Error {
             span: Some(span.clone()),
-            inner: InnerError::Wraps(Box::new(err)),
+            inner: InnerError::Wraps(err.into()),
         }
     }
     pub fn new_global(text: impl Into<Cow<'static, str>>) -> Error<S> {
