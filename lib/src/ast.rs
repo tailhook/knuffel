@@ -61,6 +61,8 @@ enum TypeNameInner {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinType {
+    U64,
+    I64,
 }
 
 /// Scalar KDL value
@@ -90,8 +92,10 @@ impl<S> Node<S> {
 
 impl BuiltinType {
     fn as_str(&self) -> &'static str {
+        use BuiltinType::*;
         match self {
-            _ => unreachable!(),
+            U64 => "u64",
+            I64 => "i64",
         }
     }
 }
@@ -99,14 +103,25 @@ impl BuiltinType {
 impl TypeName {
     // TODO(tailhook) for public API check identifier for validness
     pub(crate) fn from_string(val: Box<str>) -> TypeName {
+        use BuiltinType::*;
+        use TypeNameInner::*;
+
         match &val[..] {
-            _ => TypeName(TypeNameInner::Custom(val)),
+            "u64" => TypeName(Builtin(U64)),
+            "i64" => TypeName(Builtin(I64)),
+            _ => TypeName(Custom(val)),
         }
     }
     pub fn as_str(&self) -> &str {
         match &self.0 {
             TypeNameInner::Builtin(t) => t.as_str(),
             TypeNameInner::Custom(t) => t.as_ref(),
+        }
+    }
+    pub fn as_builtin(&self) -> Option<&BuiltinType> {
+        match &self.0 {
+            TypeNameInner::Builtin(t) => Some(t),
+            TypeNameInner::Custom(_) => None,
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use std::path::PathBuf;
 
-use crate::ast::{Literal, Integer, Radix, TypeName};
+use crate::ast::{Literal, Integer, Radix, TypeName, BuiltinType};
 use crate::span::{Spanned};
 use crate::errors::{Error, ResultExt};
 use crate::traits::{Span, DecodeScalar};
@@ -42,7 +42,7 @@ impl<S: Span> DecodeScalar<S> for u64 {
         -> Result<(), Error<S>>
     {
         if let Some(typ) = type_name {
-            if typ.as_str() != "u64" {
+            if typ.as_builtin() != Some(&BuiltinType::U64) {
                 return Err(Error::new(typ.span(),
                     format!("expected type `u64`, found `{}`", typ.as_str())));
             }
@@ -62,7 +62,7 @@ impl<S: Span> DecodeScalar<S> for i64 {
         -> Result<(), Error<S>>
     {
         if let Some(typ) = type_name {
-            if typ.as_str() != "i64" {
+            if typ.as_builtin() != Some(&BuiltinType::I64) {
                 return Err(Error::new(typ.span(),
                     format!("expected type `u64`, found `{}`", typ.as_str())));
             }
