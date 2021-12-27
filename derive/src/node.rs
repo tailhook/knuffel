@@ -1,5 +1,3 @@
-use std::default::Default;
-
 use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
@@ -261,7 +259,6 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
 {
     let mut bld = StructBuilder::new(
         syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
-        Default::default(),
     );
     bld.add_field(Field::new_named(name), false, attrs)?;
     let s = bld.build();

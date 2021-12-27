@@ -8,9 +8,15 @@ use crate::kw;
 
 pub enum Definition {
     UnitStruct(UnitStruct),
-    TupleStruct(TupleStruct),
+    TupleStruct(Struct),
     Struct(Struct),
     Enum(Enum),
+}
+
+pub enum VariantKind {
+    Unit,
+    Nested,
+    Named(Struct),
 }
 
 pub enum ArgKind {
@@ -63,6 +69,11 @@ pub struct FieldAttrs {
 #[derive(Debug, Clone)]
 pub struct VariantAttrs {
     pub skip: bool,
+    pub inner: StructAttrs,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructAttrs {
 }
 
 #[derive(Clone)]
@@ -114,13 +125,8 @@ pub struct VarChildren {
     pub field: Field,
 }
 
-pub struct TupleArg {
-    pub default: Option<syn::Expr>,
-    pub kind: ArgKind,
-}
-
 pub enum ExtraKind {
-    Default,
+    Auto,
 }
 
 pub struct ExtraField {
@@ -130,19 +136,10 @@ pub struct ExtraField {
 
 pub struct UnitStruct {
     pub ident: syn::Ident,
-    pub generics: syn::Generics,
 }
-
-pub struct TupleStruct {
-    pub ident: syn::Ident,
-    pub generics: syn::Generics,
-    pub arguments: Vec<TupleArg>,
-}
-
 
 pub struct Struct {
     pub ident: syn::Ident,
-    pub generics: syn::Generics,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -156,7 +153,6 @@ pub struct Struct {
 
 pub struct StructBuilder {
     pub ident: syn::Ident,
-    pub generics: syn::Generics,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -169,32 +165,21 @@ pub struct StructBuilder {
 pub struct Variant {
     pub ident: syn::Ident,
     pub name: String,
+    pub kind: VariantKind,
 }
 
 pub struct Enum {
     pub ident: syn::Ident,
-    pub generics: syn::Generics,
     pub variants: Vec<Variant>,
 }
 
 
 impl UnitStruct {
-    fn new(ident: syn::Ident, generics: syn::Generics,
-           _attrs: Vec<syn::Attribute>)
+    fn new(ident: syn::Ident, _attrs: &StructAttrs)
         -> syn::Result<Self>
     {
         // todo(tailhook) verify there are no attributes
-        Ok(UnitStruct { ident, generics })
-    }
-}
-
-impl TupleStruct {
-    fn new(_ident: syn::Ident, _generics: syn::Generics,
-           _attrs: Vec<syn::Attribute>,
-           _fields: impl Iterator<Item=syn::Field>)
-        -> syn::Result<Self>
-    {
-        todo!("TupleStruct constrcutor");
+        Ok(UnitStruct { ident })
     }
 }
 
@@ -220,19 +205,20 @@ fn is_option(ty: &syn::Type) -> bool {
 }
 
 impl Variant {
-    fn new(ident: syn::Ident, _attrs: VariantAttrs) -> syn::Result<Self>
+    fn new(ident: syn::Ident, _attrs: VariantAttrs, kind: VariantKind)
+        -> syn::Result<Self>
     {
         let name = heck::KebabCase::to_kebab_case(&ident.to_string()[..]);
         Ok(Variant {
             ident,
             name,
+            kind,
         })
     }
 }
 
 impl Enum {
-    fn new(ident: syn::Ident, generics: syn::Generics,
-           _attrs: Vec<syn::Attribute>,
+    fn new(ident: syn::Ident, _attrs: Vec<syn::Attribute>,
            src_variants: impl Iterator<Item=syn::Variant>)
         -> syn::Result<Self>
     {
@@ -251,37 +237,44 @@ impl Enum {
             if attrs.skip {
                 continue;
             }
-            match var.fields {
+            let kind = match var.fields {
                 syn::Fields::Named(n) => {
-                    return Err(syn::Error::new_spanned(n,
-                        "named fields are not supported in enum variants"));
+                    Struct::new(var.ident.clone(), &attrs.inner,
+                                n.named.into_iter())
+                    .map(VariantKind::Named)?
                 }
                 syn::Fields::Unnamed(u) => {
-                    if u.unnamed.len() != 1 {
-                        return Err(syn::Error::new_spanned(u,
-                            "single field expected"));
+                    let tup = Struct::new(var.ident.clone(), &attrs.inner,
+                                          u.unnamed.into_iter())?;
+                    if tup.all_fields().len() == 1
+                        && tup.extra_fields.len() == 1
+                        && matches!(tup.extra_fields[0].kind, ExtraKind::Auto)
+                    {
+                        // Single tuple variant without any defition means
+                        // the first field inside is meant to be full node
+                        // parser.
+                        VariantKind::Nested
+                    } else {
+                        todo!("only single-field tuple variants supported")
                     }
-                    variants.push(Variant::new(var.ident, attrs)?);
                 }
                 syn::Fields::Unit => {
-                    return Err(syn::Error::new_spanned(var.ident,
-                        "unit variants are not supported in enum variants"));
+                    VariantKind::Unit
                 }
-            }
+            };
+            variants.push(Variant::new(var.ident, attrs, kind)?);
         }
         Ok(Enum {
             ident,
-            generics,
             variants,
         })
     }
 }
 
 impl StructBuilder {
-    pub fn new(ident: syn::Ident, generics: syn::Generics) -> Self {
+    pub fn new(ident: syn::Ident) -> Self {
         StructBuilder {
             ident,
-            generics,
             arguments: Vec::new(),
             var_args: None::<VarArgs>,
             properties: Vec::new(),
@@ -294,7 +287,6 @@ impl StructBuilder {
     pub fn build(self) -> Struct {
         Struct {
             ident: self.ident,
-            generics: self.generics,
             has_arguments:
                 !self.arguments.is_empty() || self.var_args.is_some(),
             has_properties:
@@ -442,7 +434,7 @@ impl StructBuilder {
             None => {
                 self.extra_fields.push(ExtraField {
                     field,
-                    kind: ExtraKind::Default,
+                    kind: ExtraKind::Auto,
                 });
             }
         }
@@ -451,12 +443,11 @@ impl StructBuilder {
 }
 
 impl Struct {
-    fn new(ident: syn::Ident, generics: syn::Generics,
-           _attrs: Vec<syn::Attribute>,
+    fn new(ident: syn::Ident, _attrs: &StructAttrs,
            fields: impl Iterator<Item=syn::Field>)
         -> syn::Result<Self>
     {
-        let mut bld = StructBuilder::new(ident, generics);
+        let mut bld = StructBuilder::new(ident);
         for (idx, fld) in fields.enumerate() {
             let mut attrs = FieldAttrs::new();
             for attr in &fld.attrs {
@@ -497,26 +488,26 @@ impl Parse for Definition {
         if lookahead.peek(syn::Token![struct]) {
             let item: syn::ItemStruct = input.parse()?;
             attrs.extend(item.attrs);
+            // TODO(tailhook) parse struct attrs
+            let attrs = StructAttrs {};
             match item.fields {
                 syn::Fields::Named(n) => {
-                    Struct::new(item.ident, item.generics, attrs,
-                                n.named.into_iter())
+                    Struct::new(item.ident, &attrs, n.named.into_iter())
                     .map(Definition::Struct)
                 }
                 syn::Fields::Unnamed(u) => {
-                    TupleStruct::new(item.ident, item.generics, attrs,
-                                     u.unnamed.into_iter())
+                    Struct::new(item.ident, &attrs, u.unnamed.into_iter())
                     .map(Definition::TupleStruct)
                 }
                 syn::Fields::Unit => {
-                    UnitStruct::new(item.ident, item.generics, attrs)
+                    UnitStruct::new(item.ident, &attrs)
                     .map(Definition::UnitStruct)
                 }
             }
         } else if lookahead.peek(syn::Token![enum]) {
             let item: syn::ItemEnum = input.parse()?;
             attrs.extend(item.attrs);
-            Enum::new(item.ident, item.generics, attrs,
+            Enum::new(item.ident, attrs,
                       item.variants.into_iter())
                 .map(Definition::Enum)
         } else {
@@ -576,6 +567,7 @@ impl VariantAttrs {
     fn new() -> VariantAttrs {
         VariantAttrs {
             skip: false,
+            inner: StructAttrs {},
         }
     }
     fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
