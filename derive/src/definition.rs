@@ -1,6 +1,8 @@
+use proc_macro2::{TokenStream, Span};
+use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use proc_macro2::Span;
+use syn::spanned::Spanned;
 
 use crate::kw;
 
@@ -18,7 +20,7 @@ pub enum ArgKind {
 #[derive(Debug, Clone)]
 pub enum FieldMode {
     Argument,
-    Property,
+    Property { name: Option<String> },
     Arguments,
     Properties,
     Children,
@@ -63,31 +65,45 @@ pub struct VariantAttrs {
     pub skip: bool,
 }
 
+#[derive(Clone)]
+pub enum AttrAccess {
+    Indexed(usize),
+    Named(syn::Ident),
+}
+
+#[derive(Clone)]
+pub struct Field {
+    pub span: Span,
+    pub attr: AttrAccess,
+    pub tmp_name: syn::Ident,
+}
+
 pub struct Arg {
-    pub field: syn::Ident,
+    pub field: Field,
     pub kind: ArgKind,
     pub decode: DecodeMode,
 }
 
 pub struct VarArgs {
-    pub field: syn::Ident,
+    pub field: Field,
     pub decode: DecodeMode,
 }
 
 pub struct Prop {
-    pub field: syn::Ident,
+    pub field: Field,
+    pub name: String,
     pub option: bool,
     pub decode: DecodeMode,
     pub flatten: bool,
 }
 
 pub struct VarProps {
-    pub field: syn::Ident,
+    pub field: Field,
     pub decode: DecodeMode,
 }
 
 pub struct Child {
-    pub field: syn::Ident,
+    pub field: Field,
     pub name: String,
     pub option: bool,
     pub unwrap: Option<FieldAttrs>,
@@ -95,7 +111,7 @@ pub struct Child {
 }
 
 pub struct VarChildren {
-    pub field: syn::Ident,
+    pub field: Field,
 }
 
 pub struct TupleArg {
@@ -108,7 +124,7 @@ pub enum ExtraKind {
 }
 
 pub struct ExtraField {
-    pub ident: syn::Ident,
+    pub field: Field,
     pub kind: ExtraKind,
 }
 
@@ -182,12 +198,11 @@ impl TupleStruct {
     }
 }
 
-fn err_pair(s1: impl quote::ToTokens, s2: impl quote::ToTokens,
-            t1: &str, t2: &str)
+fn err_pair(s1: &Field, s2: &Field, t1: &str, t2: &str)
     -> syn::Error
 {
-    let mut err = syn::Error::new_spanned(s1, t1);
-    err.combine(syn::Error::new_spanned(s2, t2));
+    let mut err = syn::Error::new(s1.span, t1);
+    err.combine(syn::Error::new(s2.span, t2));
     return err;
 }
 
@@ -293,42 +308,52 @@ impl StructBuilder {
             extra_fields: self.extra_fields,
         }
     }
-    pub fn add_field(&mut self, ident: syn::Ident, is_option: bool,
+    pub fn add_field(&mut self, field: Field, is_option: bool,
                      attrs: &FieldAttrs)
         -> syn::Result<&mut Self>
     {
         match &attrs.mode {
             Some(FieldMode::Argument) => {
                 if let Some(prev) = &self.var_args {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "extra `argument` after capture all `arguments`",
                         "capture all `arguments` is defined here"));
                 }
                 self.arguments.push(Arg {
-                    field: ident,
+                    field,
                     kind: ArgKind::Value { option: is_option },
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                 });
             }
             Some(FieldMode::Arguments) => {
                 if let Some(prev) = &self.var_args {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "only single `arguments` allowed",
                         "previous `arguments` is defined here"));
                 }
                 self.var_args = Some(VarArgs {
-                    field: ident,
+                    field,
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                 });
             }
-            Some(FieldMode::Property) => {
+            Some(FieldMode::Property { name }) => {
                 if let Some(prev) = &self.var_props {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "extra `property` after capture all `properties`",
                         "capture all `properties` is defined here"));
                 }
+                let name = match (name, &field.attr) {
+                    (Some(name), _) => name.clone(),
+                    (None, AttrAccess::Named(name)) => name.to_string(),
+                    (None, AttrAccess::Indexed(_)) => {
+                        return Err(syn::Error::new(field.span,
+                            "property must be named, try \
+                             `property(name=\"something\")"));
+                    }
+                };
                 self.properties.push(Prop {
-                    field: ident,
+                    field,
+                    name,
                     option: is_option,
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                     flatten: false,
@@ -336,26 +361,33 @@ impl StructBuilder {
             }
             Some(FieldMode::Properties) => {
                 if let Some(prev) = &self.var_props {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "only single `properties` is allowed",
                         "previous `properties` is defined here"));
                 }
                 self.var_props = Some(VarProps {
-                    field: ident,
+                    field,
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                 });
             }
             Some(FieldMode::Child) => {
                 if let Some(prev) = &self.var_children {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "extra `child` after capture all `children`",
                         "capture all `children` is defined here"));
                 }
-                let name = heck::KebabCase::to_kebab_case(
-                    &ident.to_string()[..]);
+                let name = match &field.attr {
+                    AttrAccess::Named(n) => {
+                        heck::KebabCase::to_kebab_case(&n.to_string()[..])
+                    }
+                    AttrAccess::Indexed(_) => {
+                        return Err(syn::Error::new(field.span,
+                            "`child` is not allowed for tuple structs"));
+                    }
+                };
                 self.children.push(Child {
                     name,
-                    field: ident,
+                    field,
                     option: is_option,
                     unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
                     flatten: false,
@@ -363,28 +395,29 @@ impl StructBuilder {
             }
             Some(FieldMode::Children) => {
                 if let Some(prev) = &self.var_children {
-                    return Err(err_pair(ident, &prev.field,
+                    return Err(err_pair(&field, &prev.field,
                         "only single catch all `children` is allowed",
                         "previous `children` is defined here"));
                 }
                 self.var_children = Some(VarChildren {
-                    field: ident,
+                    field,
                 });
             }
             Some(FieldMode::Flatten(flatten)) => {
                 if is_option {
-                    return Err(syn::Error::new_spanned(ident,
+                    return Err(syn::Error::new(field.span,
                         "optional flatten fields are not supported yet"));
                 }
                 if flatten.property {
                     if let Some(prev) = &self.var_props {
-                        return Err(err_pair(ident, &prev.field,
+                        return Err(err_pair(&field, &prev.field,
                             "extra `flatten(property)` after \
                             capture all `properties`",
                             "capture all `properties` is defined here"));
                     }
                     self.properties.push(Prop {
-                        field: ident.clone(),
+                        field: field.clone(),
+                        name: "".into(),  // irrelevant
                         option: is_option,
                         decode: DecodeMode::Normal,
                         flatten: true,
@@ -392,14 +425,14 @@ impl StructBuilder {
                 }
                 if flatten.child {
                     if let Some(prev) = &self.var_children {
-                        return Err(err_pair(ident, &prev.field,
+                        return Err(err_pair(&field, &prev.field,
                             "extra `flatten(child)` after \
                             capture all `children`",
                             "capture all `children` is defined here"));
                     }
                     self.children.push(Child {
                         name: "".into(), // unused
-                        field: ident.clone(),
+                        field: field.clone(),
                         option: is_option,
                         unwrap: None,
                         flatten: true,
@@ -408,7 +441,7 @@ impl StructBuilder {
             }
             None => {
                 self.extra_fields.push(ExtraField {
-                    ident,
+                    field,
                     kind: ExtraKind::Default,
                 });
             }
@@ -424,9 +457,9 @@ impl Struct {
         -> syn::Result<Self>
     {
         let mut bld = StructBuilder::new(ident, generics);
-        for fld in fields {
+        for (idx, fld) in fields.enumerate() {
             let mut attrs = FieldAttrs::new();
-            for attr in fld.attrs {
+            for attr in &fld.attrs {
                 if matches!(attr.style, syn::AttrStyle::Outer) &&
                     attr.path.is_ident("knuffel")
 
@@ -435,12 +468,13 @@ impl Struct {
                     attrs.update(chunk)?;
                 }
             }
-            bld.add_field(fld.ident.unwrap(), is_option(&fld.ty), &attrs)?;
+            let field = Field::new(&fld, idx);
+            bld.add_field(field, is_option(&fld.ty), &attrs)?;
         }
 
         Ok(bld.build())
     }
-    pub fn all_fields(&self) -> Vec<&syn::Ident> {
+    pub fn all_fields(&self) -> Vec<&Field> {
         let mut res = Vec::new();
         res.extend(self.arguments.iter().map(|a| &a.field));
         res.extend(self.var_args.iter().map(|a| &a.field));
@@ -448,7 +482,7 @@ impl Struct {
         res.extend(self.var_props.iter().map(|p| &p.field));
         res.extend(self.children.iter().map(|c| &c.field));
         res.extend(self.var_children.iter().map(|c| &c.field));
-        res.extend(self.extra_fields.iter().map(|f| &f.ident));
+        res.extend(self.extra_fields.iter().map(|f| &f.field));
         return res;
     }
 }
@@ -581,7 +615,21 @@ impl Attr {
             Ok(Attr::FieldMode(FieldMode::Arguments))
         } else if lookahead.peek(kw::property) {
             let _kw: kw::property = input.parse()?;
-            Ok(Attr::FieldMode(FieldMode::Property))
+            let mut name = None;
+            if !input.is_empty() {
+                let parens;
+                syn::parenthesized!(parens in input);
+                let lookahead = parens.lookahead1();
+                if lookahead.peek(kw::name) {
+                    let _kw: kw::name = parens.parse()?;
+                    let _eq: syn::Token![=] = parens.parse()?;
+                    let name_lit: syn::LitStr = parens.parse()?;
+                    name = Some(name_lit.value());
+                } else {
+                    return Err(lookahead.error())
+                }
+            }
+            Ok(Attr::FieldMode(FieldMode::Property { name }))
         } else if lookahead.peek(kw::properties) {
             let _kw: kw::properties = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Properties))
@@ -643,8 +691,50 @@ impl Parse for FlattenItem {
     }
 }
 
-impl Prop {
-    pub fn name(&self) -> String {
-        self.field.to_string()
+impl Field {
+    pub fn new_named(name: &syn::Ident) -> Field {
+        Field {
+            span: name.span(),
+            attr: AttrAccess::Named(name.clone()),
+            tmp_name: name.clone(),
+        }
+    }
+    fn new(field: &syn::Field, idx: usize) -> Field {
+        field.ident.as_ref()
+            .map(|id| Field {
+                span: field.span(),
+                attr: AttrAccess::Named(id.clone()),
+                tmp_name: id.clone(),
+            })
+            .unwrap_or_else(|| Field {
+                span: field.span(),
+                attr: AttrAccess::Indexed(idx),
+                tmp_name: syn::Ident::new(
+                    &format!("field{}", idx),
+                    Span::mixed_site(),
+                ),
+            })
+    }
+    pub fn from_self(&self) -> TokenStream {
+        match &self.attr {
+            AttrAccess::Indexed(idx) => quote!(self.#idx),
+            AttrAccess::Named(name) => quote!(self.#name),
+        }
+    }
+    pub fn as_index(&self) -> Option<usize> {
+        match &self.attr {
+            AttrAccess::Indexed(idx) => Some(*idx),
+            AttrAccess::Named(_) => None,
+        }
+    }
+    pub fn as_assign_pair(&self) -> Option<TokenStream> {
+        match &self.attr {
+            AttrAccess::Indexed(_) => None,
+            AttrAccess::Named(n) if n == &self.tmp_name => Some(quote!(#n)),
+            AttrAccess::Named(n) => {
+                let tmp_name = &self.tmp_name;
+                Some(quote!(#n: #tmp_name))
+            }
+        }
     }
 }

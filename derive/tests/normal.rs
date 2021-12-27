@@ -30,6 +30,12 @@ struct Prop1 {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct PropNamed {
+    #[knuffel(property(name="x"))]
+    label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct OptProp {
     #[knuffel(property)]
     label: Option<String>,
@@ -122,6 +128,16 @@ fn parse_prop() {
         "19..20: unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
         "0..4: property `label` is required");
+}
+
+#[test]
+fn parse_prop_named() {
+    assert_eq!(parse::<PropNamed>(r#"node x="hello""#),
+               PropNamed { label: "hello".into() } );
+    assert_eq!(parse_err::<PropNamed>(r#"node label="hello" y="world""#),
+        "5..10: unexpected property `label`");
+    assert_eq!(parse_err::<PropNamed>(r#"node"#),
+        "0..4: property `x` is required");
 }
 
 #[test]

@@ -4,9 +4,9 @@ use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
-use crate::definition::{Child};
+use crate::definition::{Child, Field};
 
-pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
+pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
     let children = syn::Ident::new("children", Span::mixed_site());
@@ -14,7 +14,22 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
     let decode_props = decode_props(s, &node)?;
     let decode_children_normal = decode_children(s, &children,
                                           Some(quote!(#node.span())))?;
-    let fields = s.all_fields();
+    let all_fields = s.all_fields();
+    let struct_val = if named {
+        let assignments = all_fields.iter()
+            .map(|f| f.as_assign_pair().unwrap());
+        quote!(#s_name { #(#assignments,)* })
+    } else {
+        let mut fields = all_fields.iter()
+            .map(|f| (f.as_index().unwrap(), &f.tmp_name))
+            .collect::<Vec<_>>();
+        fields.sort_by_key(|(idx, _)| *idx);
+        assert_eq!(fields.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+                   (0..fields.len()).collect::<Vec<_>>(),
+                   "all tuple structure fields should be filled in");
+        let assignments = fields.iter().map(|(_, v)| v);
+        quote!{ #s_name(#(#assignments),*) }
+    };
     let mut extra_traits = Vec::new();
     let partial_compatible = !s.has_arguments && (
             s.properties.iter().all(|x| x.option || x.flatten) &&
@@ -59,9 +74,7 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
                     -> Result<Self, ::knuffel::Error<S>>
                 {
                     #decode_children
-                    Ok(#s_name {
-                        #(#fields,)*
-                    })
+                    Ok(#struct_val)
                 }
             }
         });
@@ -77,9 +90,7 @@ pub fn emit_struct(s: &Struct) -> syn::Result<TokenStream> {
                 let #children = #node.children.as_ref()
                     .map(|lst| &lst[..]).unwrap_or(&[]);
                 #decode_children_normal
-                Ok(#s_name {
-                    #(#fields,)*
-                })
+                Ok(#struct_val)
             }
         }
     })
@@ -122,7 +133,7 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         let mut #iter_args = #node.arguments.iter();
     });
     for arg in &s.arguments {
-        let fld = &arg.field;
+        let fld = &arg.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
         let decode_value = decode_value(&val, &arg.decode)?;
         match arg.kind {
@@ -148,7 +159,7 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         }
     }
     if let Some(var_args) = &s.var_args {
-        let fld = &var_args.field;
+        let fld = &var_args.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
         let decode_value = decode_value(&val, &var_args.decode)?;
         decoder.push(quote! {
@@ -177,8 +188,8 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     let name_str = syn::Ident::new("name_str", Span::mixed_site());
 
     for prop in &s.properties {
-        let fld = &prop.field;
-        let prop_name = prop.name();
+        let fld = &prop.field.tmp_name;
+        let prop_name = &prop.name;
         if prop.flatten {
             declare_empty.push(quote! {
                 let mut #fld = ::std::default::Default::default();
@@ -207,7 +218,7 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         }
     }
     if let Some(var_props) = &s.var_props {
-        let fld = &var_props.field;
+        let fld = &var_props.field.tmp_name;
         let decode_value = decode_value(&val, &var_props.decode)?;
         declare_empty.push(quote! {
             let mut #fld = Vec::new();
@@ -252,7 +263,7 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
         syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
         Default::default(),
     );
-    bld.add_field(name.clone(), false, attrs)?;
+    bld.add_field(Field::new_named(name), false, attrs)?;
     let s = bld.build();
 
     let node = syn::Ident::new("node", Span::mixed_site());
@@ -277,9 +288,9 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
 fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
     -> syn::Result<TokenStream>
 {
-    let fld = &child_def.field;
+    let fld = &child_def.field.tmp_name;
     let dest = if in_partial {
-        quote!(self.#fld)
+        child_def.field.from_self()
     } else {
         quote!(#fld)
     };
@@ -328,12 +339,12 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
 fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     let mut match_branches = Vec::with_capacity(s.children.len());
     for child_def in &s.children {
-        let fld = &child_def.field;
+        let dest = &child_def.field.from_self();
         let child_name = &child_def.name;
         if child_def.flatten {
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial
-                    ::insert_child(&mut self.#fld, #node)?
+                    ::insert_child(&mut #dest, #node)?
                 => Ok(true),
             })
         } else {
@@ -342,7 +353,7 @@ fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             let decode = decode_node(&child_def, true, node)?;
             match_branches.push(quote! {
                 #child_name => {
-                    if self.#fld.is_some() {
+                    if #dest.is_some() {
                         Err(::knuffel::Error::new(#node.node_name.span(), #dup_err))
                     } else {
                         #decode
@@ -364,19 +375,19 @@ fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident)
 {
     let mut match_branches = Vec::with_capacity(s.children.len());
     for prop in &s.properties {
-        let fld = &prop.field;
-        let prop_name = prop.name();
+        let dest = &prop.field.from_self();
+        let prop_name = &prop.name;
         if prop.flatten {
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial
-                    ::insert_property(&mut self.#fld, #name, #value)?
+                    ::insert_property(&mut #dest, #name, #value)?
                 => Ok(true),
             });
         } else {
             let decode_value = decode_value(&value, &prop.decode)?;
             match_branches.push(quote! {
                 #prop_name => {
-                    self.#fld = Some(#decode_value?);
+                    #dest = Some(#decode_value?);
                     Ok(true)
                 }
             });
@@ -401,7 +412,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
     let child = syn::Ident::new("child", Span::mixed_site());
     let name_str = syn::Ident::new("name_str", Span::mixed_site());
     for child_def in &s.children {
-        let fld = &child_def.field;
+        let fld = &child_def.field.tmp_name;
         let child_name = &child_def.name;
         if child_def.flatten {
             declare_empty.push(quote! {
@@ -454,7 +465,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
         }
     }
     if let Some(var_children) = &s.var_children {
-        let fld = &var_children.field;
+        let fld = &var_children.field.tmp_name;
         match_branches.push(quote! {
             _ => {
                 match ::knuffel::Decode::decode_node(#child) {
