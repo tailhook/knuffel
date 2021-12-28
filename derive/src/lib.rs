@@ -12,7 +12,7 @@ fn emit_decoder(def: &Definition) -> syn::Result<TokenStream> {
     match def {
         Definition::Struct(s) => node::emit_struct(s, true),
         Definition::TupleStruct(_) => todo!("decode tuple struct"),
-        Definition::UnitStruct(_) => todo!("decode unit struct"),
+        Definition::UnitStruct(s) => node::emit_struct(s, true),
         Definition::Enum(e) => variants::emit_enum(e),
     }
 }

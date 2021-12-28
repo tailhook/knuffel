@@ -7,7 +7,7 @@ use syn::spanned::Spanned;
 use crate::kw;
 
 pub enum Definition {
-    UnitStruct(UnitStruct),
+    UnitStruct(Struct),
     TupleStruct(Struct),
     Struct(Struct),
     Enum(Enum),
@@ -134,10 +134,6 @@ pub struct ExtraField {
     pub kind: ExtraKind,
 }
 
-pub struct UnitStruct {
-    pub ident: syn::Ident,
-}
-
 pub struct Struct {
     pub ident: syn::Ident,
     pub arguments: Vec<Arg>,
@@ -173,15 +169,6 @@ pub struct Enum {
     pub variants: Vec<Variant>,
 }
 
-
-impl UnitStruct {
-    fn new(ident: syn::Ident, _attrs: &StructAttrs)
-        -> syn::Result<Self>
-    {
-        // todo(tailhook) verify there are no attributes
-        Ok(UnitStruct { ident })
-    }
-}
 
 fn err_pair(s1: &Field, s2: &Field, t1: &str, t2: &str)
     -> syn::Error
@@ -500,7 +487,7 @@ impl Parse for Definition {
                     .map(Definition::TupleStruct)
                 }
                 syn::Fields::Unit => {
-                    UnitStruct::new(item.ident, &attrs)
+                    Struct::new(item.ident, &attrs, Vec::new().into_iter())
                     .map(Definition::UnitStruct)
                 }
             }
