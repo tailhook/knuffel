@@ -1,5 +1,5 @@
 use proc_macro2::{TokenStream, Span};
-use quote::quote;
+use quote::{quote, ToTokens};
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
 use crate::definition::{Child, Field};
@@ -91,6 +91,41 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
                 Ok(#struct_val)
             }
         }
+    })
+}
+
+pub fn decode_enum_item(s: &Struct,
+    s_name: impl ToTokens, node: &syn::Ident, named: bool)
+    -> syn::Result<TokenStream>
+{
+    let children = syn::Ident::new("children", Span::mixed_site());
+    let decode_args = decode_args(s, &node)?;
+    let decode_props = decode_props(s, &node)?;
+    let decode_children = decode_children(s, &children,
+                                          Some(quote!(#node.span())))?;
+    let all_fields = s.all_fields();
+    let struct_val = if named {
+        let assignments = all_fields.iter()
+            .map(|f| f.as_assign_pair().unwrap());
+        quote!(#s_name { #(#assignments,)* })
+    } else {
+        let mut fields = all_fields.iter()
+            .map(|f| (f.as_index().unwrap(), &f.tmp_name))
+            .collect::<Vec<_>>();
+        fields.sort_by_key(|(idx, _)| *idx);
+        assert_eq!(fields.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+                   (0..fields.len()).collect::<Vec<_>>(),
+                   "all tuple structure fields should be filled in");
+        let assignments = fields.iter().map(|(_, v)| v);
+        quote!{ #s_name(#(#assignments),*) }
+    };
+    Ok(quote! {
+        #decode_args
+        #decode_props
+        let #children = #node.children.as_ref()
+            .map(|lst| &lst[..]).unwrap_or(&[]);
+        #decode_children
+        Ok(#struct_val)
     })
 }
 

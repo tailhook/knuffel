@@ -2,6 +2,7 @@ use proc_macro2::{TokenStream, Span};
 use quote::quote;
 
 use crate::definition::{Enum, VariantKind};
+use crate::node;
 
 
 pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
@@ -27,7 +28,7 @@ fn decode(e: &Enum, node: &syn::Ident)
     for var in &e.variants {
         let name = &var.name;
         let variant_name = &var.ident;
-        match var.kind {
+        match &var.kind {
             VariantKind::Unit => {
                 branches.push(quote! {
                     #name => {
@@ -56,6 +57,14 @@ fn decode(e: &Enum, node: &syn::Ident)
                 branches.push(quote! {
                     #name => ::knuffel::Decode::decode_node(#node)
                         .map(#enum_name::#variant_name),
+                });
+            }
+            VariantKind::Tuple(s) => {
+                let decode = node::decode_enum_item(s,
+                    quote!(#enum_name::#variant_name),
+                    node, false)?;
+                branches.push(quote! {
+                    #name => { #decode }
                 });
             }
             VariantKind::Named(_) => todo!(),

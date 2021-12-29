@@ -16,6 +16,7 @@ pub enum Definition {
 pub enum VariantKind {
     Unit,
     Nested,
+    Tuple(Struct),
     Named(Struct),
 }
 
@@ -242,7 +243,7 @@ impl Enum {
                         // parser.
                         VariantKind::Nested
                     } else {
-                        todo!("only single-field tuple variants supported")
+                        VariantKind::Tuple(tup)
                     }
                 }
                 syn::Fields::Unit => {
