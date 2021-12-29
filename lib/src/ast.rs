@@ -61,6 +61,12 @@ enum TypeNameInner {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinType {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
     U64,
     I64,
 }
@@ -94,6 +100,12 @@ impl BuiltinType {
     fn as_str(&self) -> &'static str {
         use BuiltinType::*;
         match self {
+            U8 => "u8",
+            I8 => "i8",
+            U16 => "u16",
+            I16 => "i16",
+            U32 => "u32",
+            I32 => "i32",
             U64 => "u64",
             I64 => "i64",
         }
@@ -107,6 +119,12 @@ impl TypeName {
         use TypeNameInner::*;
 
         match &val[..] {
+            "u8" => TypeName(Builtin(U8)),
+            "i8" => TypeName(Builtin(I8)),
+            "u16" => TypeName(Builtin(U16)),
+            "i16" => TypeName(Builtin(I16)),
+            "u32" => TypeName(Builtin(U32)),
+            "i32" => TypeName(Builtin(I32)),
             "u64" => TypeName(Builtin(U64)),
             "i64" => TypeName(Builtin(I64)),
             _ => TypeName(Custom(val)),
