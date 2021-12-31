@@ -178,6 +178,11 @@ fn decode_value(val: &syn::Ident, mode: &DecodeMode)
                 }
             })
         }
+        DecodeMode::Bytes => {
+            Ok(quote! {
+                ::knuffel::decode::bytes(#val).map(Into::into)
+            })
+        }
     }
 }
 

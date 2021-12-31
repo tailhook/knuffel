@@ -69,6 +69,7 @@ pub enum BuiltinType {
     I32,
     U64,
     I64,
+    Base64,
 }
 
 /// Scalar KDL value
@@ -108,6 +109,7 @@ impl BuiltinType {
             I32 => "i32",
             U64 => "u64",
             I64 => "i64",
+            Base64 => "base64",
         }
     }
 }
@@ -127,6 +129,7 @@ impl TypeName {
             "i32" => TypeName(Builtin(I32)),
             "u64" => TypeName(Builtin(U64)),
             "i64" => TypeName(Builtin(I64)),
+            "base64" => TypeName(Builtin(Base64)),
             _ => TypeName(Custom(val)),
         }
     }

@@ -51,6 +51,7 @@ pub struct Flatten {
 pub enum DecodeMode {
     Normal,
     Str,
+    Bytes,
 }
 
 #[derive(Debug)]
@@ -672,6 +673,9 @@ impl Attr {
         } else if lookahead.peek(kw::str) {
             let _kw: kw::str = input.parse()?;
             Ok(Attr::DecodeMode(DecodeMode::Str))
+        } else if lookahead.peek(kw::bytes) {
+            let _kw: kw::bytes = input.parse()?;
+            Ok(Attr::DecodeMode(DecodeMode::Bytes))
         } else if lookahead.peek(kw::flatten) {
             let _kw: kw::flatten = input.parse()?;
             let parens;

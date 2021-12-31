@@ -13,8 +13,9 @@ documentation = "https://docs.rs/knuffel"
 [dependencies]
 combine = "4.6.2"
 knuffel-derive = {path="../derive", optional=true}
+base64 = {version="0.13.0", optional=true}
 
 [features]
-default = ["derive", "std"]
+default = ["derive", "std", "base64"]
 std = ["combine/std"]
 derive = ["knuffel-derive"]

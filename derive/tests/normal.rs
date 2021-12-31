@@ -119,6 +119,12 @@ struct Parse {
     listen: std::net::SocketAddr,
 }
 
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Bytes {
+    #[knuffel(child, unwrap(argument, bytes))]
+    data: Vec<u8>,
+}
+
 fn parse<T: Decode<Span>>(text: &str) -> T {
     let doc = raw_parse(text).unwrap();
     T::decode_node(&doc.nodes[0]).unwrap()
@@ -350,4 +356,14 @@ fn parse_str() {
                Parse { listen: "127.0.0.1:8080".parse().unwrap() });
     assert_eq!(parse_doc_err::<Parse>(r#"listen "2/3""#),
         "7..12: invalid IP address syntax");
+}
+
+#[test]
+fn parse_bytes() {
+    assert_eq!(parse_doc::<Bytes>(r#"data (base64)"aGVsbG8=""#),
+               Bytes { data: b"hello".to_vec() });
+    assert_eq!(parse_doc::<Bytes>(r#"data "world""#),
+               Bytes { data: b"world".to_vec() });
+    assert_eq!(parse_doc_err::<Bytes>(r#"data (base64)"2/3""#),
+        "13..18: Invalid last symbol 51, offset 2.");
 }

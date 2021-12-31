@@ -1,5 +1,6 @@
 syn::custom_keyword!(argument);
 syn::custom_keyword!(arguments);
+syn::custom_keyword!(bytes);
 syn::custom_keyword!(child);
 syn::custom_keyword!(children);
 syn::custom_keyword!(default);

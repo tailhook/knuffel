@@ -4,6 +4,7 @@ mod grammar;
 mod wrappers;
 
 pub mod ast;
+pub mod decode;
 pub mod errors;
 pub mod span;
 pub mod traits;
