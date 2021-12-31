@@ -53,10 +53,26 @@ fn decode(e: &Enum, node: &syn::Ident)
                     }
                 });
             }
-            VariantKind::Nested => {
+            VariantKind::Nested { option: false } => {
                 branches.push(quote! {
                     #name => ::knuffel::Decode::decode_node(#node)
                         .map(#enum_name::#variant_name),
+                });
+            }
+            VariantKind::Nested { option: true } => {
+                branches.push(quote! {
+                    #name => {
+                        if #node.arguments.len() > 0 ||
+                            #node.properties.len() > 0 ||
+                            #node.children.is_some()
+                        {
+                            ::knuffel::Decode::decode_node(#node)
+                                .map(Some)
+                                .map(#enum_name::#variant_name)
+                        } else {
+                            Ok(#enum_name::#variant_name(None))
+                        }
+                    }
                 });
             }
             VariantKind::Tuple(s) => {

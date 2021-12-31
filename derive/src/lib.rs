@@ -11,6 +11,7 @@ use definition::Definition;
 fn emit_decoder(def: &Definition) -> syn::Result<TokenStream> {
     match def {
         Definition::Struct(s) => node::emit_struct(s, true),
+        Definition::NewType(s) => node::emit_new_type(s),
         Definition::TupleStruct(s) => node::emit_struct(s, false),
         Definition::UnitStruct(s) => node::emit_struct(s, true),
         Definition::Enum(e) => variants::emit_enum(e),

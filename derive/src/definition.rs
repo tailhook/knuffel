@@ -9,13 +9,14 @@ use crate::kw;
 pub enum Definition {
     UnitStruct(Struct),
     TupleStruct(Struct),
+    NewType(NewType),
     Struct(Struct),
     Enum(Enum),
 }
 
 pub enum VariantKind {
     Unit,
-    Nested,
+    Nested { option: bool },
     Tuple(Struct),
     Named(Struct),
 }
@@ -133,6 +134,7 @@ pub enum ExtraKind {
 pub struct ExtraField {
     pub field: Field,
     pub kind: ExtraKind,
+    pub option: bool,
 }
 
 pub struct Struct {
@@ -157,6 +159,11 @@ pub struct StructBuilder {
     pub children: Vec<Child>,
     pub var_children: Option<VarChildren>,
     pub extra_fields: Vec<ExtraField>,
+}
+
+pub struct NewType {
+    pub ident: syn::Ident,
+    pub option: bool,
 }
 
 pub struct Variant {
@@ -241,7 +248,9 @@ impl Enum {
                         // Single tuple variant without any defition means
                         // the first field inside is meant to be full node
                         // parser.
-                        VariantKind::Nested
+                        VariantKind::Nested {
+                            option: tup.extra_fields[0].option,
+                        }
                     } else {
                         VariantKind::Tuple(tup)
                     }
@@ -423,6 +432,7 @@ impl StructBuilder {
                 self.extra_fields.push(ExtraField {
                     field,
                     kind: ExtraKind::Auto,
+                    option: is_option,
                 });
             }
         }
@@ -484,8 +494,19 @@ impl Parse for Definition {
                     .map(Definition::Struct)
                 }
                 syn::Fields::Unnamed(u) => {
-                    Struct::new(item.ident, &attrs, u.unnamed.into_iter())
-                    .map(Definition::TupleStruct)
+                    let tup = Struct::new(item.ident.clone(), &attrs,
+                                          u.unnamed.into_iter())?;
+                    if tup.all_fields().len() == 1
+                        && tup.extra_fields.len() == 1
+                        && matches!(tup.extra_fields[0].kind, ExtraKind::Auto)
+                    {
+                        Ok(Definition::NewType(NewType {
+                            ident: item.ident,
+                            option: tup.extra_fields[0].option,
+                        }))
+                    } else {
+                        Ok(Definition::TupleStruct(tup))
+                    }
                 }
                 syn::Fields::Unit => {
                     Struct::new(item.ident, &attrs, Vec::new().into_iter())
@@ -700,6 +721,9 @@ impl Field {
             AttrAccess::Indexed(idx) => quote!(self.#idx),
             AttrAccess::Named(name) => quote!(self.#name),
         }
+    }
+    pub fn is_indexed(&self) -> bool {
+        matches!(self.attr, AttrAccess::Indexed(_))
     }
     pub fn as_index(&self) -> Option<usize> {
         match &self.attr {

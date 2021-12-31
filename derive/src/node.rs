@@ -2,7 +2,7 @@ use proc_macro2::{TokenStream, Span};
 use quote::{quote, ToTokens};
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
-use crate::definition::{Child, Field};
+use crate::definition::{Child, Field, NewType};
 
 pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
@@ -93,6 +93,28 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         }
     })
 }
+pub fn emit_new_type(s: &NewType) -> syn::Result<TokenStream> {
+    let s_name = &s.ident;
+    let node = syn::Ident::new("node", Span::mixed_site());
+    Ok(quote! {
+        impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #s_name {
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
+                -> Result<Self, ::knuffel::Error<S>>
+            {
+                if #node.arguments.len() > 0 ||
+                    #node.properties.len() > 0 ||
+                    #node.children.is_some()
+                {
+                    ::knuffel::Decode::decode_node(#node)
+                        .map(Some)
+                        .map(#s_name)
+                } else {
+                    Ok(#s_name(None))
+                }
+            }
+        }
+    })
+}
 
 pub fn decode_enum_item(s: &Struct,
     s_name: impl ToTokens, node: &syn::Ident, named: bool)
@@ -178,8 +200,11 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                 });
             }
             ArgKind::Value { option: false } => {
-                let error = format!("additional argument `{}` is required",
-                                    fld);
+                let error = if arg.field.is_indexed() {
+                    "additional argument is required".into()
+                } else {
+                    format!("additional argument `{}` is required", fld)
+                };
                 decoder.push(quote! {
                     let #val =
                         #iter_args.next().ok_or_else(|| {
