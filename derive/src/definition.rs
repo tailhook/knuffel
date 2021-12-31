@@ -59,6 +59,7 @@ pub enum Attr {
     DecodeMode(DecodeMode),
     FieldMode(FieldMode),
     Unwrap(FieldAttrs),
+    Default(Option<syn::Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,7 @@ pub struct FieldAttrs {
     pub mode: Option<FieldMode>,
     pub decode: Option<DecodeMode>,
     pub unwrap: Option<Box<FieldAttrs>>,
+    pub default: Option<Option<syn::Expr>>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +97,7 @@ pub struct Arg {
     pub field: Field,
     pub kind: ArgKind,
     pub decode: DecodeMode,
+    pub default: Option<Option<syn::Expr>>,
 }
 
 pub struct VarArgs {
@@ -108,6 +111,7 @@ pub struct Prop {
     pub option: bool,
     pub decode: DecodeMode,
     pub flatten: bool,
+    pub default: Option<Option<syn::Expr>>,
 }
 
 pub struct VarProps {
@@ -121,6 +125,7 @@ pub struct Child {
     pub option: bool,
     pub unwrap: Option<FieldAttrs>,
     pub flatten: bool,
+    pub default: Option<Option<syn::Expr>>,
 }
 
 pub struct VarChildren {
@@ -312,6 +317,7 @@ impl StructBuilder {
                     field,
                     kind: ArgKind::Value { option: is_option },
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    default: attrs.default.clone(),
                 });
             }
             Some(FieldMode::Arguments) => {
@@ -346,6 +352,7 @@ impl StructBuilder {
                     option: is_option,
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                     flatten: false,
+                    default: attrs.default.clone(),
                 });
             }
             Some(FieldMode::Properties) => {
@@ -380,6 +387,7 @@ impl StructBuilder {
                     option: is_option,
                     unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
                     flatten: false,
+                    default: attrs.default.clone(),
                 });
             }
             Some(FieldMode::Children) => {
@@ -410,6 +418,7 @@ impl StructBuilder {
                         option: is_option,
                         decode: DecodeMode::Normal,
                         flatten: true,
+                        default: None,
                     });
                 }
                 if flatten.child {
@@ -425,6 +434,7 @@ impl StructBuilder {
                         option: is_option,
                         unwrap: None,
                         flatten: true,
+                        default: None,
                     });
                 }
             }
@@ -531,6 +541,7 @@ impl FieldAttrs {
             mode: None,
             decode: None,
             unwrap: None,
+            default: None,
         }
     }
     fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
@@ -559,10 +570,17 @@ impl FieldAttrs {
                     if self.decode.is_some() {
                         return Err(syn::Error::new(span,
                             "only single attribute that defines parser of the \
-                            field is allowed."));
+                            field is allowed"));
                     }
                     self.decode = Some(mode);
 
+                }
+                Default(value) => {
+                    if self.default.is_some() {
+                        return Err(syn::Error::new(span,
+                            "only single default is allowed"));
+                    }
+                    self.default = Some(value);
                 }
                 _ => return Err(syn::Error::new(span,
                     "this attribute is not supported on fields")),
@@ -617,7 +635,7 @@ impl Attr {
         } else if lookahead.peek(kw::property) {
             let _kw: kw::property = input.parse()?;
             let mut name = None;
-            if !input.is_empty() {
+            if !input.is_empty() && !input.lookahead1().peek(syn::Token![,]) {
                 let parens;
                 syn::parenthesized!(parens in input);
                 let lookahead = parens.lookahead1();
@@ -671,6 +689,15 @@ impl Attr {
                 }
             }
             Ok(Attr::FieldMode(FieldMode::Flatten(flatten)))
+        } else if lookahead.peek(kw::default) {
+            let _kw: kw::default = input.parse()?;
+            if !input.is_empty() && !input.lookahead1().peek(syn::Token![,]) {
+                let _eq: syn::Token![=] = input.parse()?;
+                let value: syn::Expr = input.parse()?;
+                Ok(Attr::Default(Some(value)))
+            } else {
+                Ok(Attr::Default(None))
+            }
         } else {
             Err(lookahead.error())
         }

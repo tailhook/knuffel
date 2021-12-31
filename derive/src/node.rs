@@ -191,15 +191,15 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         let fld = &arg.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
         let decode_value = decode_value(&val, &arg.decode)?;
-        match arg.kind {
-            ArgKind::Value { option: true } => {
+        match (&arg.default, &arg.kind) {
+            (None, ArgKind::Value { option: true }) => {
                 decoder.push(quote! {
                     let #fld = #iter_args.next().map(|#val| {
                         #decode_value
                     }).transpose()?;
                 });
             }
-            ArgKind::Value { option: false } => {
+            (None, ArgKind::Value { option: false }) => {
                 let error = if arg.field.is_indexed() {
                     "additional argument is required".into()
                 } else {
@@ -212,6 +212,20 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                                 #node.node_name.span(), #error)
                         })?;
                     let #fld = #decode_value?;
+                });
+            }
+            (Some(default_value), ArgKind::Value {..}) => {
+                let default = if let Some(expr) = default_value {
+                    quote!(#expr)
+                } else {
+                    quote!(::std::default::Default::default())
+                };
+                decoder.push(quote! {
+                    let #fld = #iter_args.next().map(|#val| {
+                        #decode_value
+                    }).transpose()?.unwrap_or_else(|| {
+                        #default
+                    });
                 });
             }
         }
@@ -266,7 +280,16 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                 #prop_name => #fld = Some(#decode_value?),
             });
             let req_msg = format!("property `{}` is required", prop_name);
-            if !prop.option {
+            if let Some(value) = &prop.default {
+                let default = if let Some(expr) = value {
+                    quote!(#expr)
+                } else {
+                    quote!(::std::default::Default::default())
+                };
+                postprocess.push(quote! {
+                    let #fld = #fld.unwrap_or_else(|| #default);
+                });
+            } else if !prop.option {
                 postprocess.push(quote! {
                     let #fld = #fld.ok_or_else(|| {
                         ::knuffel::Error::new(#node.node_name.span(), #req_msg)
@@ -504,7 +527,16 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 }
             });
             let req_msg = format!("child node `{}` is required", child_name);
-            if !child_def.option {
+            if let Some(default_value) = &child_def.default {
+                let default = if let Some(expr) = default_value {
+                    quote!(#expr)
+                } else {
+                    quote!(::std::default::Default::default())
+                };
+                postprocess.push(quote! {
+                    let #fld = #fld.unwrap_or_else(|| #default);
+                });
+            } else if !child_def.option {
                 if let Some(span) = &err_span {
                     postprocess.push(quote! {
                         let #fld = #fld.ok_or_else(|| {

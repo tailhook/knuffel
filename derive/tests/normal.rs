@@ -1,5 +1,6 @@
 use std::fmt;
 use std::collections::BTreeMap;
+use std::default::Default;
 
 use knuffel::{Decode, span::Span, raw_parse};
 use knuffel::traits::DecodeChildren;
@@ -8,6 +9,18 @@ use knuffel::traits::DecodeChildren;
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct Arg1 {
     #[knuffel(argument)]
+    name: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct ArgDef {
+    #[knuffel(argument, default)]
+    name: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct ArgDefValue {
+    #[knuffel(argument, default="unnamed".into())]
     name: String,
 }
 
@@ -23,9 +36,21 @@ struct VarArg {
     params: Vec<u64>,
 }
 
-#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+#[derive(knuffel_derive::Decode, Debug, PartialEq, Default)]
 struct Prop1 {
     #[knuffel(property)]
+    label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct PropDef {
+    #[knuffel(property, default)]
+    label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct PropDefValue {
+    #[knuffel(property, default="unknown".into())]
     label: String,
 }
 
@@ -71,6 +96,18 @@ struct Child {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct ChildDef {
+    #[knuffel(child, default)]
+    main: Prop1,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct ChildDefValue {
+    #[knuffel(child, default=Prop1 { label: String::from("prop1") })]
+    main: Prop1,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct Unwrap {
     #[knuffel(child, unwrap(argument))]
     label: String,
@@ -113,6 +150,26 @@ fn parse_arg1() {
 }
 
 #[test]
+fn parse_arg_default() {
+    assert_eq!(parse::<ArgDef>(r#"node "hello""#),
+               ArgDef { name: "hello".into() } );
+    assert_eq!(parse_err::<ArgDef>(r#"node "hello" "world""#),
+        "13..20: unexpected argument");
+    assert_eq!(parse::<ArgDef>(r#"node"#),
+               ArgDef { name: "".into() } );
+}
+
+#[test]
+fn parse_arg_def_value() {
+    assert_eq!(parse::<ArgDefValue>(r#"node "hello""#),
+               ArgDefValue { name: "hello".into() } );
+    assert_eq!(parse_err::<ArgDefValue>(r#"node "hello" "world""#),
+        "13..20: unexpected argument");
+    assert_eq!(parse::<ArgDefValue>(r#"node"#),
+               ArgDefValue { name: "unnamed".into() } );
+}
+
+#[test]
 fn parse_opt_arg() {
     assert_eq!(parse::<OptArg>(r#"node "hello""#),
                OptArg { name: Some("hello".into()) } );
@@ -128,6 +185,22 @@ fn parse_prop() {
         "19..20: unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
         "0..4: property `label` is required");
+}
+
+#[test]
+fn parse_prop_default() {
+    assert_eq!(parse::<PropDef>(r#"node label="hello""#),
+               PropDef { label: "hello".into() } );
+    assert_eq!(parse::<PropDef>(r#"node"#),
+               PropDef { label: "".into() });
+}
+
+#[test]
+fn parse_prop_def_value() {
+    assert_eq!(parse::<PropDefValue>(r#"node label="hello""#),
+               PropDefValue { label: "hello".into() } );
+    assert_eq!(parse::<PropDefValue>(r#"node"#),
+               PropDefValue { label: "unknown".into() });
 }
 
 #[test]
@@ -235,6 +308,30 @@ fn parse_child() {
                "0..9: unexpected node `something`");
     assert_eq!(parse_doc_err::<Child>(r#""#),
                "child node `main` is required");
+}
+
+#[test]
+fn parse_child_def() {
+    assert_eq!(parse::<ChildDef>(r#"parent { main label="val1"; }"#),
+               ChildDef {
+                   main: Prop1 { label: "val1".into() },
+               });
+    assert_eq!(parse::<ChildDef>(r#"parent"#),
+               ChildDef {
+                   main: Prop1 { label: "".into() },
+               });
+}
+
+#[test]
+fn parse_child_def_value() {
+    assert_eq!(parse::<ChildDefValue>(r#"parent { main label="val1"; }"#),
+               ChildDefValue {
+                   main: Prop1 { label: "val1".into() },
+               });
+    assert_eq!(parse::<ChildDefValue>(r#"parent"#),
+               ChildDefValue {
+                   main: Prop1 { label: "prop1".into() },
+               });
 }
 
 #[test]
