@@ -10,8 +10,8 @@ pub mod span;
 pub mod traits;
 
 #[cfg(feature="derive")]
-pub use knuffel_derive::Decode;
+pub use knuffel_derive::{Decode, DecodeScalar};
 
 pub use wrappers::raw_parse;
-pub use traits::{Decode, DecodeChildren};
+pub use traits::{Decode, DecodeScalar, DecodeChildren};
 pub use errors::Error;

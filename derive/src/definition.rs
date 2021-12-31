@@ -340,7 +340,8 @@ impl StructBuilder {
                 }
                 let name = match (name, &field.attr) {
                     (Some(name), _) => name.clone(),
-                    (None, AttrAccess::Named(name)) => name.to_string(),
+                    (None, AttrAccess::Named(name))
+                    => heck::KebabCase::to_kebab_case(&name.to_string()[..]),
                     (None, AttrAccess::Indexed(_)) => {
                         return Err(syn::Error::new(field.span,
                             "property must be named, try \
