@@ -31,7 +31,7 @@ pub enum FieldMode {
     Property { name: Option<String> },
     Arguments,
     Properties,
-    Children,
+    Children { name: Option<String> },
     Child,
     Flatten(Flatten),
 }
@@ -127,6 +127,7 @@ pub struct Child {
     pub unwrap: Option<FieldAttrs>,
     pub flatten: bool,
     pub default: Option<Option<syn::Expr>>,
+    pub multi: bool,
 }
 
 pub struct VarChildren {
@@ -390,9 +391,26 @@ impl StructBuilder {
                     unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
                     flatten: false,
                     default: attrs.default.clone(),
+                    multi: false,
                 });
             }
-            Some(FieldMode::Children) => {
+            Some(FieldMode::Children { name: Some(name) }) => {
+                if let Some(prev) = &self.var_children {
+                    return Err(err_pair(&field, &prev.field,
+                        "extra `children(name=` after capture all `children`",
+                        "capture all `children` is defined here"));
+                }
+                self.children.push(Child {
+                    name: name.clone(),
+                    field,
+                    option: is_option,
+                    unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
+                    flatten: false,
+                    default: attrs.default.clone(),
+                    multi: true,
+                });
+            }
+            Some(FieldMode::Children { name: None }) => {
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
                         "only single catch all `children` is allowed",
@@ -437,6 +455,7 @@ impl StructBuilder {
                         unwrap: None,
                         flatten: true,
                         default: None,
+                        multi: true,  // potentially yes
                     });
                 }
             }
@@ -656,7 +675,21 @@ impl Attr {
             Ok(Attr::FieldMode(FieldMode::Properties))
         } else if lookahead.peek(kw::children) {
             let _kw: kw::children = input.parse()?;
-            Ok(Attr::FieldMode(FieldMode::Children))
+            let mut name = None;
+            if !input.is_empty() && !input.lookahead1().peek(syn::Token![,]) {
+                let parens;
+                syn::parenthesized!(parens in input);
+                let lookahead = parens.lookahead1();
+                if lookahead.peek(kw::name) {
+                    let _kw: kw::name = parens.parse()?;
+                    let _eq: syn::Token![=] = parens.parse()?;
+                    let name_lit: syn::LitStr = parens.parse()?;
+                    name = Some(name_lit.value());
+                } else {
+                    return Err(lookahead.error())
+                }
+            }
+            Ok(Attr::FieldMode(FieldMode::Children { name }))
         } else if lookahead.peek(kw::child) {
             let _kw: kw::child = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Child))

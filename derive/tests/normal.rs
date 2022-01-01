@@ -84,6 +84,14 @@ struct Children {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct FilteredChildren {
+    #[knuffel(children(name="left"))]
+    left: Vec<OptArg>,
+    #[knuffel(children(name="right"))]
+    right: Vec<OptArg>,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 enum Variant {
     Arg1(Arg1),
     Prop1(Prop1),
@@ -280,6 +288,32 @@ fn parse_children() {
                ]} );
     assert_eq!(parse_doc::<Children>(r#""#),
                Children { children: Vec::new() } );
+}
+
+#[test]
+fn parse_filtered_children() {
+    assert_eq!(parse_doc::<FilteredChildren>(
+                   r#"left "v1"; right "v2"; left "v3""#),
+               FilteredChildren {
+                   left: vec![
+                       OptArg { name: Some("v1".into()) },
+                       OptArg { name: Some("v3".into()) },
+                   ],
+                   right: vec![
+                       OptArg { name: Some("v2".into()) },
+                   ]
+               });
+    assert_eq!(parse_doc::<FilteredChildren>(r#"right; left"#),
+               FilteredChildren {
+                   left: vec![
+                       OptArg { name: None },
+                   ],
+                   right: vec![
+                       OptArg { name: None },
+                   ]
+               });
+    assert_eq!(parse_doc_err::<FilteredChildren>(r#"some"#),
+               "0..4: unexpected node `some`");
 }
 
 #[test]

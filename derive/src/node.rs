@@ -385,45 +385,42 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
     } else {
         quote!(#fld)
     };
-    if let Some(inner) = child_def.unwrap.as_ref() {
+    let (init, func) = if let Some(inner) = child_def.unwrap.as_ref() {
         let func = syn::Ident::new(&format!("unwrap_{}", fld),
                                    Span::mixed_site());
         let unwrap_fn = unwrap_fn(&func, fld, inner)?;
-        if in_partial {
-            Ok(quote! {
-                #unwrap_fn
-                #dest = Some(#func(#child)?);
-                Ok(true)
-            })
-        } else {
-            Ok(quote! {
-                #unwrap_fn
-                match #func(#child) {
-                    Ok(#child) => {
-                        #dest = Some(#child);
-                        None
-                    }
-                    Err(e) => Some(Err(e)),
-                }
-            })
-        }
+        (unwrap_fn, quote!(#func))
     } else {
-        if in_partial {
-            Ok(quote! {
-                #dest = Some(::knuffel::Decode::decode_node(#child)?);
+        (quote!(), quote!(::knuffel::Decode::decode_node))
+    };
+    let value = syn::Ident::new("value", Span::mixed_site());
+    let assign = if child_def.multi {
+        quote!(#dest.push(#value))
+    } else {
+        quote!(#dest = Some(#value))
+    };
+    if in_partial {
+        Ok(quote! {
+            {
+                #init
+                let #value = #func(#child)?;
+                #assign;
                 Ok(true)
-            })
-        } else {
-            Ok(quote! {
-                match ::knuffel::Decode::decode_node(#child) {
-                    Ok(#child) => {
-                        #dest = Some(#child);
+            }
+        })
+    } else {
+        Ok(quote! {
+            {
+                #init
+                match #func(#child) {
+                    Ok(#value) => {
+                        #assign;
                         None
                     }
                     Err(e) => Some(Err(e)),
                 }
-            })
-        }
+            }
+        })
     }
 }
 
@@ -520,6 +517,50 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                     }
                 ) => None,
             })
+        } else if child_def.multi {
+            declare_empty.push(quote! {
+                let mut #fld = Vec::new();
+            });
+            let decode = decode_node(&child_def, false, &child)?;
+            match_branches.push(quote! {
+                #child_name => #decode,
+            });
+            if let Some(default_value) = &child_def.default {
+                let default = if let Some(expr) = default_value {
+                    quote!(#expr)
+                } else {
+                    quote!(::std::default::Default::default())
+                };
+                if child_def.option {
+                    postprocess.push(quote! {
+                        let #fld = if #fld.is_empty() {
+                            #default
+                        } else {
+                            Some(#fld.into_iter().collect())
+                        };
+                    });
+                } else {
+                    postprocess.push(quote! {
+                        let #fld = if #fld.is_empty() {
+                            #default
+                        } else {
+                            #fld.into_iter().collect()
+                        };
+                    });
+                }
+            } else if child_def.option {
+                postprocess.push(quote! {
+                    let #fld = if #fld.is_empty() {
+                        None
+                    } else {
+                        Some(#fld.into_iter().collect())
+                    };
+                });
+            } else {
+                postprocess.push(quote! {
+                    let #fld = #fld.into_iter().collect();
+                });
+            }
         } else {
             declare_empty.push(quote! {
                 let mut #fld = None;
