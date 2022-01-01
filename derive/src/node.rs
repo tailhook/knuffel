@@ -2,7 +2,13 @@ use proc_macro2::{TokenStream, Span};
 use quote::{quote, ToTokens};
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
-use crate::definition::{Child, Field, NewType, ExtraKind};
+use crate::definition::{Child, Field, NewType, ExtraKind, ChildMode};
+
+fn child_can_partial(child: &Child) -> bool {
+    use ChildMode::*;
+
+    child.option || matches!(child.mode, Bool | Flatten)
+}
 
 pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
@@ -35,7 +41,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
             s.properties.iter().all(|x| x.option || x.flatten) &&
             s.var_props.is_none()
         ) && (
-            s.children.iter().all(|x| x.option || x.flatten) &&
+            s.children.iter().all(child_can_partial) &&
             s.var_children.is_none()
         );
     if partial_compatible {
@@ -354,7 +360,7 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
     let mut bld = StructBuilder::new(
         syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
     );
-    bld.add_field(Field::new_named(name), false, attrs)?;
+    bld.add_field(Field::new_named(name), false, false, attrs)?;
     let s = bld.build();
 
     let node = syn::Ident::new("node", Span::mixed_site());
@@ -385,7 +391,7 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
     } else {
         quote!(#fld)
     };
-    let (init, func) = if let Some(inner) = child_def.unwrap.as_ref() {
+    let (init, func) = if let ChildMode::Unwrap(inner) = &child_def.mode {
         let func = syn::Ident::new(&format!("unwrap_{}", fld),
                                    Span::mixed_site());
         let unwrap_fn = unwrap_fn(&func, fld, inner)?;
@@ -394,7 +400,7 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
         (quote!(), quote!(::knuffel::Decode::decode_node))
     };
     let value = syn::Ident::new("value", Span::mixed_site());
-    let assign = if child_def.multi {
+    let assign = if matches!(child_def.mode, ChildMode::Multi) {
         quote!(#dest.push(#value))
     } else {
         quote!(#dest = Some(#value))
@@ -429,7 +435,7 @@ fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     for child_def in &s.children {
         let dest = &child_def.field.from_self();
         let child_name = &child_def.name;
-        if child_def.flatten {
+        if matches!(child_def.mode, ChildMode::Flatten) {
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial
                     ::insert_child(&mut #dest, #node)?
@@ -442,7 +448,8 @@ fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             match_branches.push(quote! {
                 #child_name => {
                     if #dest.is_some() {
-                        Err(::knuffel::Error::new(#node.node_name.span(), #dup_err))
+                        Err(::knuffel::Error::new(
+                            #node.node_name.span(), #dup_err))
                     } else {
                         #decode
                     }
@@ -502,106 +509,149 @@ fn decode_children(s: &Struct, children: &syn::Ident,
     for child_def in &s.children {
         let fld = &child_def.field.tmp_name;
         let child_name = &child_def.name;
-        if child_def.flatten {
-            declare_empty.push(quote! {
-                let mut #fld = ::std::default::Default::default();
-            });
-            match_branches.push(quote! {
-                _ if (
-                    match ::knuffel::traits::DecodePartial
-                        ::insert_child(&mut #fld, #child)
-                    {
-                        Ok(true) => return None,
-                        Ok(false) => false,
-                        Err(e) => return Some(Err(e)),
+        match child_def.mode {
+            ChildMode::Flatten => {
+                declare_empty.push(quote! {
+                    let mut #fld = ::std::default::Default::default();
+                });
+                match_branches.push(quote! {
+                    _ if (
+                        match ::knuffel::traits::DecodePartial
+                            ::insert_child(&mut #fld, #child)
+                        {
+                            Ok(true) => return None,
+                            Ok(false) => false,
+                            Err(e) => return Some(Err(e)),
+                        }
+                    ) => None,
+                })
+            }
+            ChildMode::Multi => {
+                declare_empty.push(quote! {
+                    let mut #fld = Vec::new();
+                });
+                let decode = decode_node(&child_def, false, &child)?;
+                match_branches.push(quote! {
+                    #child_name => #decode,
+                });
+                if let Some(default_value) = &child_def.default {
+                    let default = if let Some(expr) = default_value {
+                        quote!(#expr)
+                    } else {
+                        quote!(::std::default::Default::default())
+                    };
+                    if child_def.option {
+                        postprocess.push(quote! {
+                            let #fld = if #fld.is_empty() {
+                                #default
+                            } else {
+                                Some(#fld.into_iter().collect())
+                            };
+                        });
+                    } else {
+                        postprocess.push(quote! {
+                            let #fld = if #fld.is_empty() {
+                                #default
+                            } else {
+                                #fld.into_iter().collect()
+                            };
+                        });
                     }
-                ) => None,
-            })
-        } else if child_def.multi {
-            declare_empty.push(quote! {
-                let mut #fld = Vec::new();
-            });
-            let decode = decode_node(&child_def, false, &child)?;
-            match_branches.push(quote! {
-                #child_name => #decode,
-            });
-            if let Some(default_value) = &child_def.default {
-                let default = if let Some(expr) = default_value {
-                    quote!(#expr)
-                } else {
-                    quote!(::std::default::Default::default())
-                };
-                if child_def.option {
+                } else if child_def.option {
                     postprocess.push(quote! {
                         let #fld = if #fld.is_empty() {
-                            #default
+                            None
                         } else {
                             Some(#fld.into_iter().collect())
                         };
                     });
                 } else {
                     postprocess.push(quote! {
-                        let #fld = if #fld.is_empty() {
-                            #default
-                        } else {
-                            #fld.into_iter().collect()
-                        };
+                        let #fld = #fld.into_iter().collect();
                     });
                 }
-            } else if child_def.option {
-                postprocess.push(quote! {
-                    let #fld = if #fld.is_empty() {
-                        None
-                    } else {
-                        Some(#fld.into_iter().collect())
-                    };
-                });
-            } else {
-                postprocess.push(quote! {
-                    let #fld = #fld.into_iter().collect();
-                });
             }
-        } else {
-            declare_empty.push(quote! {
-                let mut #fld = None;
-            });
-            let dup_err = format!("duplicate node `{}`, single node expected",
-                                  child_name.escape_default());
-            let decode = decode_node(&child_def, false, &child)?;
-            match_branches.push(quote! {
-                #child_name => {
-                    if #fld.is_some() {
-                        Some(Err(::knuffel::Error::new(#child.node_name.span(),
-                                                       #dup_err)))
+            ChildMode::Normal | ChildMode::Unwrap(_) => {
+                declare_empty.push(quote! {
+                    let mut #fld = None;
+                });
+                let dup_err = format!(
+                    "duplicate node `{}`, single node expected",
+                    child_name.escape_default());
+                let decode = decode_node(&child_def, false, &child)?;
+                match_branches.push(quote! {
+                    #child_name => {
+                        if #fld.is_some() {
+                            Some(Err(::knuffel::Error::new(
+                                #child.node_name.span(), #dup_err)))
+                        } else {
+                            #decode
+                        }
+                    }
+                });
+                let req_msg = format!("child node `{}` is required",
+                                      child_name);
+                if let Some(default_value) = &child_def.default {
+                    let default = if let Some(expr) = default_value {
+                        quote!(#expr)
                     } else {
-                        #decode
+                        quote!(::std::default::Default::default())
+                    };
+                    postprocess.push(quote! {
+                        let #fld = #fld.unwrap_or_else(|| #default);
+                    });
+                } else if !child_def.option {
+                    if let Some(span) = &err_span {
+                        postprocess.push(quote! {
+                            let #fld = #fld.ok_or_else(|| {
+                                ::knuffel::Error::new(#span, #req_msg)
+                            })?;
+                        });
+                    } else {
+                        postprocess.push(quote! {
+                            let #fld = #fld.ok_or_else(|| {
+                                ::knuffel::Error::new_global(#req_msg)
+                            })?;
+                        });
                     }
                 }
-            });
-            let req_msg = format!("child node `{}` is required", child_name);
-            if let Some(default_value) = &child_def.default {
-                let default = if let Some(expr) = default_value {
-                    quote!(#expr)
-                } else {
-                    quote!(::std::default::Default::default())
-                };
-                postprocess.push(quote! {
-                    let #fld = #fld.unwrap_or_else(|| #default);
+            }
+            ChildMode::Bool => {
+                let dup_err = format!(
+                    "duplicate node `{}`, single node expected",
+                    child_name.escape_default());
+                declare_empty.push(quote! {
+                    let mut #fld = false;
                 });
-            } else if !child_def.option {
-                if let Some(span) = &err_span {
-                    postprocess.push(quote! {
-                        let #fld = #fld.ok_or_else(|| {
-                            ::knuffel::Error::new(#span, #req_msg)
-                        })?;
-                    });
-                } else {
-                    postprocess.push(quote! {
-                        let #fld = #fld.ok_or_else(|| {
-                            ::knuffel::Error::new_global(#req_msg)
-                        })?;
-                    });
-                }
+                match_branches.push(quote! {
+                    #child_name => {
+                        for arg in &#child.arguments {
+                            return Some(Err(::knuffel::Error::new(
+                                arg.literal.span(), "unexpected argument")));
+                        }
+                        for (name, _) in &#child.properties {
+                            return Some(Err(::knuffel::Error::new(name.span(),
+                                format!("unexpected property `{}`",
+                                        name.escape_default()))));
+                        }
+                        if let Some(children) = &#child.children {
+                            for child in children.iter() {
+                                return Some(
+                                    Err(::knuffel::Error::new(child.span(),
+                                        format!("unexpected node `{}`",
+                                            child.node_name.escape_default())
+                                    )));
+                            }
+                        }
+                        if #fld {
+                            Some(Err(::knuffel::Error::new(
+                                #child.node_name.span(), #dup_err)))
+                        } else {
+                            #fld = true;
+                            None
+                        }
+                    }
+                });
             }
         }
     }

@@ -106,6 +106,8 @@ struct Child {
     main: Prop1,
     #[knuffel(child)]
     extra: Option<Prop1>,
+    #[knuffel(child)]
+    flag: bool,
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -322,6 +324,7 @@ fn parse_child() {
                Child {
                    main: Prop1 { label: "val1".into() },
                    extra: None,
+                   flag: false,
                });
     assert_eq!(parse::<Child>(r#"parent {
                     main label="primary";
@@ -330,6 +333,7 @@ fn parse_child() {
                Child {
                    main: Prop1 { label: "primary".into() },
                    extra: Some(Prop1 { label: "replica".into() }),
+                   flag: false,
                });
     assert_eq!(parse_err::<Child>(r#"parent { something; }"#),
                "9..19: unexpected node `something`");
@@ -340,14 +344,17 @@ fn parse_child() {
                Child {
                    main: Prop1 { label: "val1".into() },
                    extra: None,
+                   flag: false,
                });
     assert_eq!(parse_doc::<Child>(r#"
                     main label="primary"
                     extra label="replica"
+                    flag
                  "#),
                Child {
                    main: Prop1 { label: "primary".into() },
                    extra: Some(Prop1 { label: "replica".into() }),
+                   flag: true,
                });
     assert_eq!(parse_doc_err::<Child>(r#"something"#),
                "0..9: unexpected node `something`");

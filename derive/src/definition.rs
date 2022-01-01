@@ -120,14 +120,20 @@ pub struct VarProps {
     pub decode: DecodeMode,
 }
 
+pub enum ChildMode {
+    Normal,
+    Unwrap(Box<FieldAttrs>),
+    Flatten,
+    Multi,
+    Bool,
+}
+
 pub struct Child {
     pub field: Field,
     pub name: String,
     pub option: bool,
-    pub unwrap: Option<FieldAttrs>,
-    pub flatten: bool,
+    pub mode: ChildMode,
     pub default: Option<Option<syn::Expr>>,
-    pub multi: bool,
 }
 
 pub struct VarChildren {
@@ -203,6 +209,13 @@ fn is_option(ty: &syn::Type) -> bool {
             },
         })
         if segments.len() == 1 && segments[0].ident == "Option"
+    )
+}
+
+fn is_bool(ty: &syn::Type) -> bool {
+    matches!(ty,
+        syn::Type::Path(syn::TypePath { qself: None, path })
+        if path.is_ident("bool")
     )
 }
 
@@ -304,7 +317,7 @@ impl StructBuilder {
             extra_fields: self.extra_fields,
         }
     }
-    pub fn add_field(&mut self, field: Field, is_option: bool,
+    pub fn add_field(&mut self, field: Field, is_option: bool, is_bool: bool,
                      attrs: &FieldAttrs)
         -> syn::Result<&mut Self>
     {
@@ -388,10 +401,14 @@ impl StructBuilder {
                     name,
                     field,
                     option: is_option,
-                    unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
-                    flatten: false,
+                    mode: if let Some(unwrap) = &attrs.unwrap {
+                        ChildMode::Unwrap(unwrap.clone())
+                    } else if is_bool {
+                        ChildMode::Bool
+                    } else {
+                        ChildMode::Normal
+                    },
                     default: attrs.default.clone(),
-                    multi: false,
                 });
             }
             Some(FieldMode::Children { name: Some(name) }) => {
@@ -404,10 +421,8 @@ impl StructBuilder {
                     name: name.clone(),
                     field,
                     option: is_option,
-                    unwrap: attrs.unwrap.as_ref().map(|v| (**v).clone()),
-                    flatten: false,
+                    mode: ChildMode::Multi,
                     default: attrs.default.clone(),
-                    multi: true,
                 });
             }
             Some(FieldMode::Children { name: None }) => {
@@ -452,10 +467,8 @@ impl StructBuilder {
                         name: "".into(), // unused
                         field: field.clone(),
                         option: is_option,
-                        unwrap: None,
-                        flatten: true,
+                        mode: ChildMode::Flatten,
                         default: None,
-                        multi: true,  // potentially yes
                     });
                 }
             }
@@ -489,7 +502,7 @@ impl Struct {
                 }
             }
             let field = Field::new(&fld, idx);
-            bld.add_field(field, is_option(&fld.ty), &attrs)?;
+            bld.add_field(field, is_option(&fld.ty), is_bool(&fld.ty), &attrs)?;
         }
 
         Ok(bld.build())
