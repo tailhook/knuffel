@@ -31,6 +31,11 @@ struct OptArg {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Extra {
+    field: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct VarArg {
     #[knuffel(arguments)]
     params: Vec<u64>,
@@ -366,4 +371,12 @@ fn parse_bytes() {
                Bytes { data: b"world".to_vec() });
     assert_eq!(parse_doc_err::<Bytes>(r#"data (base64)"2/3""#),
         "13..18: Invalid last symbol 51, offset 2.");
+}
+
+#[test]
+fn parse_extra() {
+    assert_eq!(parse::<Extra>(r#"data"#),
+               Extra { field: "".into() });
+    assert_eq!(parse_err::<Extra>(r#"data x=1"#),
+        "5..6: unexpected property `x`");
 }

@@ -2,7 +2,7 @@ use proc_macro2::{TokenStream, Span};
 use quote::{quote, ToTokens};
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
-use crate::definition::{Child, Field, NewType};
+use crate::definition::{Child, Field, NewType, ExtraKind};
 
 pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
@@ -12,6 +12,8 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let decode_props = decode_props(s, &node)?;
     let decode_children_normal = decode_children(s, &children,
                                           Some(quote!(#node.span())))?;
+    let assign_extra = assign_extra(s)?;
+
     let all_fields = s.all_fields();
     let struct_val = if named {
         let assignments = all_fields.iter()
@@ -72,6 +74,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
                     -> Result<Self, ::knuffel::Error<S>>
                 {
                     #decode_children
+                    #assign_extra
                     Ok(#struct_val)
                 }
             }
@@ -88,6 +91,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
                 let #children = #node.children.as_ref()
                     .map(|lst| &lst[..]).unwrap_or(&[]);
                 #decode_children_normal
+                #assign_extra
                 Ok(#struct_val)
             }
         }
@@ -125,6 +129,7 @@ pub fn decode_enum_item(s: &Struct,
     let decode_props = decode_props(s, &node)?;
     let decode_children = decode_children(s, &children,
                                           Some(quote!(#node.span())))?;
+    let assign_extra = assign_extra(s)?;
     let all_fields = s.all_fields();
     let struct_val = if named {
         let assignments = all_fields.iter()
@@ -147,6 +152,7 @@ pub fn decode_enum_item(s: &Struct,
         let #children = #node.children.as_ref()
             .map(|lst| &lst[..]).unwrap_or(&[]);
         #decode_children
+        #assign_extra
         Ok(#struct_val)
     })
 }
@@ -596,4 +602,16 @@ fn decode_children(s: &Struct, children: &syn::Ident,
             #(#postprocess)*
         })
     }
+}
+
+fn assign_extra(s: &Struct) -> syn::Result<TokenStream> {
+    let items = s.extra_fields.iter().map(|fld| {
+        match fld.kind {
+            ExtraKind::Auto => {
+                let name = &fld.field.tmp_name;
+                quote!(let #name = ::std::default::Default::default();)
+            }
+        }
+    });
+    Ok(quote!(#(#items)*))
 }
