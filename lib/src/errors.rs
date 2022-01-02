@@ -162,7 +162,7 @@ impl<S, T, R> From<Errors<T, R, S>> for RawError<S>
                     write!(&mut expected, ", `{}`",
                            item.to_string().escape_default()).unwrap();
                 }
-                write!(&mut expected, "or `{}`",
+                write!(&mut expected, " or `{}`",
                        all_expected.last().unwrap()
                        .to_string().escape_default()).unwrap();
             } else {

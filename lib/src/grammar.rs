@@ -793,6 +793,33 @@ mod test {
         assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
                    "child2");
 
+        let nval = parse(node(), "parent{\nchild3\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child3");
+
+        let nval = parse(node(), "parent \"x\"=1 {\nchild4\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child4");
+
+        let nval = parse(node(), "parent \"x\" {\nchild4\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child4");
+
+        let nval = parse(node(), "parent \"x\"{\nchild5\n}").unwrap();
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child5");
+
         let nval = parse(node(), "hello /-\"skip_arg\" \"arg2\"").unwrap();
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
