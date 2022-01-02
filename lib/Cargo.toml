@@ -12,6 +12,7 @@ documentation = "https://docs.rs/knuffel"
 
 [dependencies]
 combine = "4.6.2"
+chumsky = "0.7.0"
 knuffel-derive = {path="../derive", optional=true}
 base64 = {version="0.13.0", optional=true}
 
