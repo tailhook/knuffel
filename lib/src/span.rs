@@ -22,6 +22,12 @@ pub struct FileSpan(pub Arc<PathBuf>, pub Span);
 impl traits::Span for Span {}
 impl traits::Span for FileSpan {}
 
+impl Span {
+    pub fn length(&self) -> usize {
+        self.1.saturating_sub(self.0)
+    }
+}
+
 impl Into<miette::SourceSpan> for Span {
     fn into(self: Span) -> miette::SourceSpan {
         (self.0, self.1 - self.0).into()

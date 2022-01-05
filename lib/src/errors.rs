@@ -75,7 +75,7 @@ pub(crate) enum ParseErrorEnum {
         #[label="opened at"]
         opened_at: Span,
         opened: TokenFormat,
-        #[label="expected at"]
+        #[label="should be closed before"]
         expected_at: Span,
         expected: TokenFormat,
         found: TokenFormat,
@@ -104,6 +104,12 @@ impl From<Option<char>> for TokenFormat {
 impl From<char> for TokenFormat {
     fn from(chr: char) -> TokenFormat {
         TokenFormat::Char(chr)
+    }
+}
+
+impl From<&'static str> for TokenFormat {
+    fn from(s: &'static str) -> TokenFormat {
+        TokenFormat::Static(s)
     }
 }
 
@@ -173,14 +179,14 @@ impl chumsky::Error<char> for ParseErrorEnum {
     }
     fn merge(mut self, other: Self) -> Self {
         use ParseErrorEnum::*;
-        assert!(self.span() == other.span());
         match (&mut self, other) {
             (Unclosed { .. }, _) => self,
             (_, other@Unclosed { .. }) => other,
             (Unexpected { expected: ref mut dest, .. },
-             Unexpected { expected, .. })
+             Unexpected { position, expected, .. })
             => {
                 dest.extend(expected.into_iter());
+                assert!(self.span() == &position);
                 self
             }
             (_, other) => todo!("{} -> {}", self, other),

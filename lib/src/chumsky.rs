@@ -2,8 +2,8 @@ use chumsky::prelude::*;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
 use crate::ast::{SpannedName, SpannedChildren, Document};
-use crate::traits::Span;
-use crate::errors::ParseErrorEnum as Error;
+use crate::span::Span;
+use crate::errors::{ParseErrorEnum as Error, TokenFormat};
 
 
 fn newline() -> impl Parser<char, (), Error=Error> {
@@ -37,7 +37,7 @@ fn comment() -> impl Parser<char, (), Error=Error> {
 }
 
 fn ml_comment() -> impl Parser<char, (), Error=Error> {
-    recursive(|comment| {
+    recursive::<_, _, _, _, Error>(|comment| {
         choice((
             comment,
             none_of('*').ignored(),
@@ -45,6 +45,22 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
         )).repeated().ignored()
         .delimited_by(just("/*"), just("*/")).ignored()
     })
+        .map_err_with_span(|e, span| {
+            if span.length() > 2 {
+                assert!(span.1 - span.0 >= 2);
+                e.merge(Error::Unclosed {
+                    label: None,
+                    opened_at: Span(span.0, span.0+2), // we know it's `/ *`
+                    opened: "/*".into(),
+                    expected_at: Span(span.1, span.1),
+                    expected: "*/".into(),
+                    found: None.into(),
+                })
+            } else {
+                // otherwise opening /* is not matched
+                e
+            }
+        })
 }
 
 /*
@@ -134,22 +150,101 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "found end of input, expected `*` or `/`",
+                "message": "unclosed delimiter `*/`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "unexpected token",
-                    "span": {"offset": 10,"length": 0}}
+                    {"label": "opened at",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 10, "length": 0}}
                 ],
                 "related": []
             }]
         }"#);
-        err_eq!(parse(ws(), r#"/* comment *"#),
-            "{}");
-        err_eq!(parse(ws(), r#"/*/"#),
-                "{}");
+        err_eq!(parse(ws(), r#"/* com/*ment *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed delimiter `*/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened at",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 14, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* com/*me*/nt *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed delimiter `*/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened at",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 16, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* comment *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed delimiter `*/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened at",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 12, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/*/"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed delimiter `*/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened at",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 3, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
         // nothing is expected for comment or whitespace
-        err_eq!(parse(ws(), r#"xxx"#),
-                "{}");
+        err_eq!(parse(ws(), r#"xxx"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `x`, expected `/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 0, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
     }
 }
