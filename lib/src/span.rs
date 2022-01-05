@@ -22,6 +22,40 @@ pub struct FileSpan(pub Arc<PathBuf>, pub Span);
 impl traits::Span for Span {}
 impl traits::Span for FileSpan {}
 
+impl Into<miette::SourceSpan> for Span {
+    fn into(self: Span) -> miette::SourceSpan {
+        (self.0, self.1 - self.0).into()
+    }
+}
+
+impl Into<miette::SourceSpan> for FileSpan {
+    fn into(self: FileSpan) -> miette::SourceSpan {
+        self.1.into()
+    }
+}
+
+impl chumsky::Span for Span {
+    type Context = ();
+    type Offset = usize;
+    fn new(context: (), range: std::ops::Range<usize>) -> Self {
+        Span(range.start(), range.end())
+    }
+    fn context(&self) -> () { () }
+    fn start(&self) -> usize { self.0 }
+    fn end(&self) -> usize { self.1 }
+}
+
+impl chumsky::Span for FileSpan {
+    type Context = Arc<PathBuf>;
+    type Offset = usize;
+    fn new(context: Arc<PathBuf>, range: std::ops::Range<usize>) -> Self {
+        FileSpan(context, Span(range.start(), range.end()))
+    }
+    fn context(&self) -> Arc<PathBuf> { self.0.clone() }
+    fn start(&self) -> usize { (self.1).0 }
+    fn end(&self) -> usize { (self.1).1 }
+}
+
 /// Adds custom span type ot the abstract syntax tree (AST) nodes
 pub trait SpanContext<P> {
     type Span;

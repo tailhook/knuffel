@@ -4,6 +4,7 @@ use combine::stream::state;
 
 use crate::ast::Document;
 use crate::errors::RawError;
+use crate::errors::{RealError, ParseError, ParseErrorEnum};
 use crate::grammar::{self, SpanState};
 use crate::span::{Span, SimpleContext};
 
@@ -22,7 +23,6 @@ pub fn raw_parse(text: &str) -> Result<Document<Span>, RawError<Span>> {
     })?;
     Ok(doc)
 }
-
 
 #[test]
 fn normal() {

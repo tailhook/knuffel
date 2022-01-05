@@ -1,19 +1,226 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fmt;
 
+use thiserror::Error;
+use miette::Diagnostic;
 use combine::easy::Errors;
 use combine::stream::easy::Error as Err;
+
+use crate::span::Span;
 
 pub(crate) trait ResultExt<T, S: Clone> {
     fn err_span(self, s: &S) -> Result<T, Error<S>>;
 }
 
+#[derive(Debug, Diagnostic, Error)]
+#[error("{}", error)]
+#[diagnostic(forward(error))]
+pub(crate) struct AddSource<E: Diagnostic + 'static> {
+    #[source_code]
+    pub source: std::sync::Arc<String>,
+    #[source]
+    pub error: E,
+}
+
+#[derive(Debug, Diagnostic, Error)]
+pub enum RealError {
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Parse(ParseError),
+    /*
+    #[error(transparent)]
+    TypeName(Box<dyn Diagnostic + Send + Sync + 'static>),
+    #[error(transparent)]
+    ScalarType(Box<dyn Diagnostic + Send + Sync + 'static>),
+    #[error(transparent)]
+    Convert(Box<dyn Diagnostic + Send + Sync + 'static>),
+    #[error(transparent)]
+    Custom(Box<dyn Diagnostic + Send + Sync + 'static>),
+    */
+}
+
+#[derive(Debug, Diagnostic, Error)]
+#[error("error parsing KDL text")]
+#[diagnostic()]
+pub struct ParseError {
+    #[related]
+    pub(crate) errors: Vec<AddSource<ParseErrorEnum>>,
+}
+
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
+pub(crate) enum TokenFormat {
+    Char(char),
+    Static(&'static str),
+    Eoi,
+}
+
+struct FormatUnexpected<'x>(&'x TokenFormat, &'x BTreeSet<TokenFormat>);
+
+#[derive(Debug, Diagnostic, Error)]
+pub(crate) enum ParseErrorEnum {
+    #[error("{}", FormatUnexpected(found, expected))]
+    #[diagnostic()]
+    Unexpected {
+        label: Option<&'static str>,
+        #[label="unexpected token"]
+        position: Span,
+        found: TokenFormat,
+        expected: BTreeSet<TokenFormat>,
+    },
+    #[error("unclosed delimiter {}", expected)]
+    #[diagnostic()]
+    Unclosed {
+        label: Option<&'static str>,
+        #[label="opened at"]
+        opened_at: Span,
+        opened: TokenFormat,
+        #[label="expected at"]
+        expected_at: Span,
+        expected: TokenFormat,
+        found: TokenFormat,
+    },
+    #[error("{}", message)]
+    #[diagnostic()]
+    ParseError {
+        label: Option<&'static str>,
+        #[label="unexpected token"]
+        position: Span,
+        message: String,
+    }
+}
+
+
+impl From<Option<char>> for TokenFormat {
+    fn from(chr: Option<char>) -> TokenFormat {
+        if let Some(chr) = chr {
+            TokenFormat::Char(chr)
+        } else {
+            TokenFormat::Eoi
+        }
+    }
+}
+
+impl From<char> for TokenFormat {
+    fn from(chr: char) -> TokenFormat {
+        TokenFormat::Char(chr)
+    }
+}
+
+impl fmt::Display for TokenFormat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use TokenFormat::*;
+        match self {
+            Eoi => write!(f, "end of input"),
+            Char(c) => write!(f, "`{}`", c.escape_default()),
+            Static(s) => write!(f, "`{}`", s.escape_default()),
+        }
+    }
+}
+
+impl fmt::Display for FormatUnexpected<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "found {}", self.0)?;
+            let mut iter = self.1.iter();
+        if let Some(item) = iter.next() {
+            write!(f, ", expected {}", item)?;
+            let back = iter.next_back();
+            for item in iter {
+                write!(f, ", {}", item)?;
+            }
+            if let Some(item) = back {
+                write!(f, " or {}", item)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ParseErrorEnum {
+    pub(crate) fn span(&self) -> &Span {
+        use ParseErrorEnum::*;
+        match self {
+            Unexpected { position, .. } => position,
+            Unclosed { expected_at, .. } => expected_at,
+            ParseError { position, .. } => position,
+        }
+    }
+}
+
+impl chumsky::Error<char> for ParseErrorEnum {
+    type Span = Span;
+    type Label = &'static str;
+    fn expected_input_found<Iter>(mut span: Self::Span, expected: Iter,
+        found: Option<char>)
+        -> Self
+        where Iter: IntoIterator<Item = Option<char>>
+    {
+        ParseErrorEnum::Unexpected {
+            label: None,
+            position: span.into(),
+            found: found.into(),
+            expected: expected.into_iter().map(Into::into).collect(),
+        }
+    }
+    fn with_label(mut self, new_label: Self::Label) -> Self {
+        use ParseErrorEnum::*;
+        match self {
+            Unexpected { ref mut label, .. } => *label = Some(new_label),
+            Unclosed { ref mut label, .. } => *label = Some(new_label),
+            ParseError { ref mut label, .. } => *label = Some(new_label),
+        }
+        self
+    }
+    fn merge(mut self, other: Self) -> Self {
+        use ParseErrorEnum::*;
+        assert!(self.span() == other.span());
+        match (&mut self, other) {
+            (Unclosed { .. }, _) => self,
+            (_, other@Unclosed { .. }) => other,
+            (Unexpected { expected: ref mut dest, .. },
+             Unexpected { expected, .. })
+            => {
+                dest.extend(expected.into_iter());
+                self
+            }
+            (_, other) => todo!("{} -> {}", self, other),
+        }
+    }
+    fn unclosed_delimiter(
+        unclosed_span: Self::Span,
+        unclosed: char,
+        mut span: Self::Span,
+        expected: char,
+        found: Option<char>
+    ) -> Self {
+        ParseErrorEnum::Unclosed {
+            label: None,
+            opened_at: unclosed_span.into(),
+            opened: unclosed.into(),
+            expected_at: span.into(),
+            expected: expected.into(),
+            found: found.into(),
+        }
+    }
+}
+
+/*
+#[derive(Debug, Diagnostic, Error)]
+#[error("error converting value to type {}", type_name)]
+struct Convert<E: std::error::Error + Send + Sync + 'static> {
+    span: miette::SourceSpan,
+    type_name: &'static str,
+    #[source]
+    error: E,
+}
+*/
+
 #[derive(Debug)]
 pub struct RawError<S> {
-    span: S,
-    unexpected: Option<String>,
-    expected: Option<String>,
-    messages: Vec<String>,
+    pub(crate) span: S,
+    pub(crate) unexpected: Option<String>,
+    pub(crate) expected: Option<String>,
+    pub(crate) messages: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -144,7 +351,7 @@ impl<S, T, R> From<Errors<T, R, S>> for RawError<S>
                 None
             }
         }).collect::<Vec<_>>();
-        debug_assert!(unexpected.len() <= 1);
+        //debug_assert!(unexpected.len() <= 1);
 
         let all_expected = error.errors.iter().filter_map(|e| {
             if let Err::Expected(info) = e {

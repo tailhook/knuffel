@@ -16,6 +16,15 @@ combine = "4.6.2"
 chumsky = { git="https://github.com/zesterer/chumsky" }
 knuffel-derive = {path="../derive", optional=true}
 base64 = {version="0.13.0", optional=true}
+#miette = "3.2.0"
+miette = { git="https://github.com/zkat/miette" }
+thiserror = "1.0.30"
+
+[dev-dependencies]
+#miette = {version="3.2.0", features=["fancy"]}
+miette = { git="https://github.com/zkat/miette", features=["fancy"] }
+pretty_assertions = "1.0.0"
+serde_json = "1.0"
 
 [features]
 default = ["derive", "std", "base64"]

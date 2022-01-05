@@ -1,11 +1,12 @@
 use chumsky::prelude::*;
-use chumsky::Error;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
 use crate::ast::{SpannedName, SpannedChildren, Document};
 use crate::traits::Span;
+use crate::errors::ParseErrorEnum as Error;
 
-pub fn newline<E: Error<char>>() -> impl Parser<char, (), Error=E> {
+
+fn newline() -> impl Parser<char, (), Error=Error> {
     just('\r')
         .or_not()
         .ignore_then(just('\n'))
@@ -17,7 +18,7 @@ pub fn newline<E: Error<char>>() -> impl Parser<char, (), Error=E> {
         .ignored()
 }
 
-pub fn ws_char<E: Error<char>>() -> impl Parser<char, (), Error=E> {
+fn ws_char() -> impl Parser<char, (), Error=Error> {
     filter(|c| matches!(c,
         '\t' | ' ' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200A}' |
@@ -27,16 +28,15 @@ pub fn ws_char<E: Error<char>>() -> impl Parser<char, (), Error=E> {
     .ignored()
 }
 
-pub fn ws<E: Error<char> + 'static>() -> impl Parser<char, (), Error=E> {
+fn ws() -> impl Parser<char, (), Error=Error> {
     ws_char().repeated().at_least(1).ignored().or(ml_comment())
 }
 
-pub fn comment<E: Error<char>>() -> impl Parser<char, (), Error=E> {
+fn comment() -> impl Parser<char, (), Error=Error> {
     just("//").then(take_until(newline().or(end()))).ignored()
 }
 
-pub fn ml_comment<E: Error<char> + 'static>() -> impl Parser<char, (), Error=E>
-{
+fn ml_comment() -> impl Parser<char, (), Error=Error> {
     recursive(|comment| {
         choice((
             comment,
@@ -57,26 +57,54 @@ fn parser<S: Span>() -> impl Parser<char, Document<S>, Error=Simple<char>> {
 mod test {
     use chumsky::prelude::*;
     use chumsky::error::SimpleReason;
+    use chumsky::Stream;
+    use crate::errors::{ParseError, ParseErrorEnum, AddSource};
+    use crate::span::Span;
     use super::{ws, comment, ml_comment};
+    use miette::IntoDiagnostic;
+
+    macro_rules! err_eq {
+        ($left: expr, $right: expr) => {
+            let left: serde_json::Value =
+                serde_json::from_str(&$left.unwrap_err()).unwrap();
+            let right: serde_json::Value =
+                serde_json::from_str($right).unwrap();
+            pretty_assertions::assert_eq!(left, right);
+        }
+    }
 
     fn parse<'x, P, T>(p: P, text: &'x str) -> Result<T, String>
-        where P: Parser<char, T, Error=Simple<char>>
+        where P: Parser<char, T, Error=ParseErrorEnum>
     {
-        let (data, errs) = p.then_ignore(end()).parse_recovery(text);
+        let (data, errors) = p.then_ignore(end())
+            .parse_recovery(Stream::from_iter(
+                Span(text.len(), text.len()),
+                text.char_indices()
+                    .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
+            ));
+        if !errors.is_empty() {
+            let source: std::sync::Arc<String> = (text.to_string() + " ").into();
+            let e = ParseError {
+                errors: errors.into_iter().map(|error| {
+                    AddSource {
+                        source: source.clone(),
+                        error,
+                    }
+                }).collect(),
+            };
+            let mut buf = String::with_capacity(512);
+            miette::GraphicalReportHandler::new()
+                .render_report(&mut buf, &e).unwrap();
+            println!("{}", buf);
+            buf.truncate(0);
+            miette::JSONReportHandler::new()
+                .render_report(&mut buf, &e).unwrap();
+            return Err(buf);
+        }
         if let Some(data) = data {
             return Ok(data);
         }
-        Err(errs.iter().map(|e| {
-            let kind = match e.reason() {
-                SimpleReason::Unexpected => "unexpected".into(),
-                SimpleReason::Unclosed { span, delimiter } => {
-                    format!("unclosed {} at {}..{}",
-                            delimiter, span.start(), span.end())
-                }
-                SimpleReason::Custom(text) => text.clone(),
-            };
-            format!("{}..{}: {}: {}", e.span().start(), e.span().end(), kind, e.to_string())
-        }).collect::<Vec<_>>().join("\n"))
+        unreachable!();
     }
 
     #[test]
@@ -101,25 +129,27 @@ mod test {
 
     #[test]
     fn parse_comment_err() {
-        let err = parse(ws(), r#"/* comment *"#).unwrap_err();
-        println!("{}", err);
-        assert_eq!(err,
-            "12..13: unexpected: found end of input but / was expected");
-
-        let err = parse(ws(), r#"/* comment"#).unwrap_err();
-        println!("{}", err);
-        // order of items is random
-        assert!(err.starts_with(
-                "10..11: unexpected: found end of input but one of"));
-
-        let err = parse(ws(), r#"/*/"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.starts_with(
-                "3..4: unexpected: found end of input but one of"));
-
-        let err = parse(ws(), r#"xxx"#).unwrap_err();
-        println!("{}", err);
+        err_eq!(parse(ws(), r#"/* comment"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found end of input, expected `*` or `/`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 10,"length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* comment *"#),
+            "{}");
+        err_eq!(parse(ws(), r#"/*/"#),
+                "{}");
         // nothing is expected for comment or whitespace
-        assert_eq!(err, "0..1: unexpected: found 'x' but / was expected");
+        err_eq!(parse(ws(), r#"xxx"#),
+                "{}");
     }
 }
