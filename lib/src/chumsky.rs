@@ -171,13 +171,12 @@ mod test {
     fn parse<'x, P, T>(p: P, text: &'x str) -> Result<T, String>
         where P: Parser<char, T, Error=ParseErrorEnum>
     {
-        let (data, errors) = p.then_ignore(end())
-            .parse_recovery(Stream::from_iter(
+        p.then_ignore(end())
+        .parse(Stream::from_iter(
                 Span(text.len(), text.len()),
                 text.char_indices()
                     .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
-            ));
-        if !errors.is_empty() {
+        )).map_err(|errors| {
             let source: std::sync::Arc<String> = (text.to_string() + " ").into();
             let e = ParseError {
                 errors: errors.into_iter().map(|error| {
@@ -194,12 +193,8 @@ mod test {
             buf.truncate(0);
             miette::JSONReportHandler::new()
                 .render_report(&mut buf, &e).unwrap();
-            return Err(buf);
-        }
-        if let Some(data) = data {
-            return Ok(data);
-        }
-        unreachable!();
+            return buf;
+        })
     }
 
     #[test]
