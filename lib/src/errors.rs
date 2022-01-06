@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::fmt;
+use std::fmt::{self, Write};
 
 use thiserror::Error;
 use miette::Diagnostic;
@@ -53,6 +53,8 @@ pub(crate) enum TokenFormat {
     Char(char),
     Token(&'static str),
     Kind(&'static str),
+    OpenRaw(usize),
+    CloseRaw(usize),
     Eoi,
 }
 
@@ -69,14 +71,14 @@ pub(crate) enum ParseErrorEnum {
         found: TokenFormat,
         expected: BTreeSet<TokenFormat>,
     },
-    #[error("unclosed delimiter {}", expected)]
+    #[error("unclosed {} {}", label, opened)]
     #[diagnostic()]
     Unclosed {
-        label: Option<&'static str>,
+        label: &'static str,
         #[label="opened here"]
         opened_at: Span,
         opened: TokenFormat,
-        #[label="should be closed before"]
+        #[label("expected {}", expected)]
         expected_at: Span,
         expected: TokenFormat,
         found: TokenFormat,
@@ -126,6 +128,26 @@ impl fmt::Display for TokenFormat {
             Token(s) => write!(f, "`{}`", s.escape_default()),
             Kind(s) => write!(f, "{}", s),
             Eoi => write!(f, "end of input"),
+            OpenRaw(0) => {
+                f.write_str("`r\"`")
+            }
+            OpenRaw(n) => {
+                f.write_str("`r")?;
+                for _ in 0..*n {
+                    f.write_char('#')?;
+                }
+                f.write_str("\"`")
+            }
+            CloseRaw(0) => {
+                f.write_str("`\"`")
+            }
+            CloseRaw(n) => {
+                f.write_str("`\"")?;
+                for _ in 0..*n {
+                    f.write_char('#')?;
+                }
+                f.write_char('`')
+            }
         }
     }
 }
@@ -178,7 +200,7 @@ impl chumsky::Error<char> for ParseErrorEnum {
         use ParseErrorEnum::*;
         match self {
             Unexpected { ref mut label, .. } => *label = Some(new_label),
-            Unclosed { ref mut label, .. } => *label = Some(new_label),
+            Unclosed { ref mut label, .. } => *label = new_label,
             ParseError { ref mut label, .. } => *label = Some(new_label),
         }
         self
@@ -206,7 +228,7 @@ impl chumsky::Error<char> for ParseErrorEnum {
         found: Option<char>
     ) -> Self {
         ParseErrorEnum::Unclosed {
-            label: None,
+            label: "delimited",
             opened_at: unclosed_span.into(),
             opened: unclosed.into(),
             expected_at: span.into(),

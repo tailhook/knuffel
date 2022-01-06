@@ -53,7 +53,7 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
         {
             assert!(span.1 - span.0 >= 2);
             e.merge(Error::Unclosed {
-                label: None,
+                label: "comment",
                 opened_at: Span(span.0, span.0+2), // we know it's `/ *`
                 opened: "/*".into(),
                 expected_at: Span(span.1, span.1),
@@ -67,8 +67,39 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
     })
 }
 
+fn raw_string() -> impl Parser<char, Box<str>, Error=Error> {
+    just('r')
+        .ignore_then(just('#').repeated().map(|v| v.len()))
+        .then_ignore(just('"'))
+        .then_with(|sharp_num|
+            take_until(
+                just('"')
+                .ignore_then(just('#').repeated().exactly(sharp_num)
+                             .ignored()))
+            .map_err_with_span(move |e, span| {
+                if matches!(&e, Error::Unexpected {
+                    found: TokenFormat::Eoi, .. })
+                {
+                    e.merge(Error::Unclosed {
+                        label: "raw string",
+                        opened_at: Span(span.0 - sharp_num - 2, span.0),
+                        opened: TokenFormat::OpenRaw(sharp_num),
+                        expected_at: Span(span.1, span.1),
+                        expected: TokenFormat::CloseRaw(sharp_num),
+                        found: None.into(),
+                    })
+                } else {
+                    e
+                }
+            })
+        )
+    .map(|(text, ())| {
+        text.into_iter().collect::<String>().into()
+    })
+}
+
 fn string() -> impl Parser<char, Box<str>, Error=Error> {
-    escaped_string()
+    raw_string().or(escaped_string())
 }
 
 fn expected(s: &'static str) -> BTreeSet<TokenFormat> {
@@ -126,7 +157,7 @@ fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
     .map_err_with_span(|e, span| {
         if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) {
             e.merge(Error::Unclosed {
-                label: None,
+                label: "string",
                 opened_at: Span(span.0, span.0+1), // we know it's `"`
                 opened: '"'.into(),
                 expected_at: Span(span.1, span.1),
@@ -158,7 +189,7 @@ mod test {
         ($left: expr, $right: expr) => {
             let left = $left.unwrap_err();
             let left = left.replace("}{", "},{"); // bug in miette master
-            let left = left.replace(r#"`\\"`"#, r#"`\"`"#); // bug in miette
+            let left = left.replace(r#"\\""#, r#"\""#); // bug in miette
             let left: serde_json::Value = serde_json::from_str(&left).unwrap();
             let right: serde_json::Value =
                 serde_json::from_str($right).unwrap();
@@ -224,13 +255,13 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `*/`",
+                "message": "unclosed comment `/*`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
-                    {"label": "should be closed before",
+                    {"label": "expected `*/`",
                     "span": {"offset": 10, "length": 0}}
                 ],
                 "related": []
@@ -241,13 +272,13 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `*/`",
+                "message": "unclosed comment `/*`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
-                    {"label": "should be closed before",
+                    {"label": "expected `*/`",
                     "span": {"offset": 14, "length": 0}}
                 ],
                 "related": []
@@ -258,13 +289,13 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `*/`",
+                "message": "unclosed comment `/*`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
-                    {"label": "should be closed before",
+                    {"label": "expected `*/`",
                     "span": {"offset": 16, "length": 0}}
                 ],
                 "related": []
@@ -275,13 +306,13 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `*/`",
+                "message": "unclosed comment `/*`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
-                    {"label": "should be closed before",
+                    {"label": "expected `*/`",
                     "span": {"offset": 12, "length": 0}}
                 ],
                 "related": []
@@ -292,13 +323,13 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `*/`",
+                "message": "unclosed comment `/*`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
-                    {"label": "should be closed before",
+                    {"label": "expected `*/`",
                     "span": {"offset": 3, "length": 0}}
                 ],
                 "related": []
@@ -333,19 +364,28 @@ mod test {
     }
 
     #[test]
+    fn parse_raw_str() {
+        assert_eq!(&*parse(string(), r#"r"hello""#).unwrap(), "hello");
+        assert_eq!(&*parse(string(), r##"r#"world"#"##).unwrap(), "world");
+        assert_eq!(&*parse(string(), r##"r#"world"#"##).unwrap(), "world");
+        assert_eq!(&*parse(string(), r####"r###"a\n"##b"###"####).unwrap(),
+                   "a\\n\"##b");
+    }
+
+    #[test]
     fn parse_str_err() {
         err_eq!(parse(string(), r#""hello"#), r#"{
             "message": "error parsing KDL text",
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "unclosed delimiter `\"`",
+                "message": "unclosed string `\"`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 1}},
-                    {"label": "should be closed before",
+                    {"label": "expected `\"`",
                     "span": {"offset": 6, "length": 0}}
                 ],
                 "related": []
@@ -439,4 +479,76 @@ mod test {
             }]
         }"#);
     }
+    #[test]
+    fn parse_raw_str_err() {
+        err_eq!(parse(string(), r#"r"hello"#),  r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `\"`",
+                    "span": {"offset": 7, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r###"r#"hello""###), r###"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r#\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 3}},
+                    {"label": "expected `\"#`",
+                    "span": {"offset": 9, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"###);
+        err_eq!(parse(string(), r####"r###"hello"####), r####"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r###\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 5}},
+                    {"label": "expected `\"###`",
+                    "span": {"offset": 10, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"####);
+        err_eq!(parse(string(), r####"r###"hello"#world"####), r####"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r###\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 5}},
+                    {"label": "expected `\"###`",
+                    "span": {"offset": 17, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"####);
+    }
 }
+
