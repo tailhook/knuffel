@@ -30,6 +30,47 @@ fn ws_char() -> impl Parser<char, (), Error=Error> {
     .ignored()
 }
 
+fn id_char() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
+        '\u{0000}'..='\u{0021}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
+}
+
+fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
+        '0'..='9' |
+        '\u{0000}'..='\u{0020}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
+}
+
+fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
+        '-'| '+' | '0'..='9' |
+        '\u{0000}'..='\u{0020}' |
+        '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
+        // whitespace, excluding 0x20
+        '\u{00a0}' | '\u{1680}' |
+        '\u{2000}'..='\u{200A}' |
+        '\u{202F}' | '\u{205F}' | '\u{3000}' |
+        // newline (excluding <= 0x20)
+        '\u{0085}' | '\u{2028}' | '\u{2029}'
+    ))
+}
+
 fn ws() -> impl Parser<char, (), Error=Error> {
     ws_char().repeated().at_least(1).ignored().or(ml_comment())
 }
@@ -170,6 +211,43 @@ fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
     })
 }
 
+fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
+    let sign = just('+').or(just('-'));
+    choice((
+        sign.chain(id_sans_dig().chain(id_char().repeated())),
+        sign.repeated().exactly(1),
+        id_sans_sign_dig().chain(id_char().repeated())
+    ))
+    .map(|v| v.into_iter().collect()).try_map(|s: String, position| {
+        match &s[..] {
+            "true" => Err(Error::Unexpected {
+                label: None,
+                position,
+                found: TokenFormat::Token("true"),
+                expected: expected("identifier"),
+            }),
+            "false" => Err(Error::Unexpected {
+                label: None,
+                position,
+                found: TokenFormat::Token("false"),
+                expected: expected("identifier"),
+            }),
+            "null" => Err(Error::Unexpected {
+                label: None,
+                position,
+                found: TokenFormat::Token("null"),
+                expected: expected("identifier"),
+            }),
+            _ => Ok(s.into()),
+        }
+    })
+    .labelled("identifier")
+}
+
+fn ident() -> impl Parser<char, Box<str>, Error=Error> {
+    choice((bare_ident(), string()))
+}
+
 /*
 fn parser<S: Span>() -> impl Parser<char, Document<S>, Error=Simple<char>> {
     todo!()
@@ -183,7 +261,7 @@ mod test {
     use chumsky::Stream;
     use crate::errors::{ParseError, ParseErrorEnum, AddSource};
     use crate::span::Span;
-    use super::{ws, comment, ml_comment, string};
+    use super::{ws, comment, ml_comment, string, ident};
 
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
@@ -549,6 +627,29 @@ mod test {
                 "related": []
             }]
         }"####);
+    }
+
+    #[test]
+    fn parse_ident() {
+        assert_eq!(&*parse(ident(), "abcdef").unwrap(), "abcdef");
+        assert_eq!(&*parse(ident(), "xx_cd$yy").unwrap(), "xx_cd$yy");
+        assert_eq!(&*parse(ident(), "-").unwrap(), "-");
+        assert_eq!(&*parse(ident(), "--hello").unwrap(), "--hello");
+        assert_eq!(&*parse(ident(), "--hello1234").unwrap(), "--hello1234");
+        assert_eq!(&*parse(ident(), "--1").unwrap(), "--1");
+        assert_eq!(&*parse(ident(), "++1").unwrap(), "++1");
+        assert_eq!(&*parse(ident(), "-hello").unwrap(), "-hello");
+        assert_eq!(&*parse(ident(), "+hello").unwrap(), "+hello");
+        assert_eq!(&*parse(ident(), "-A").unwrap(), "-A");
+        assert_eq!(&*parse(ident(), "+b").unwrap(), "+b");
+        assert_eq!(&*parse(ident().then_ignore(ws()), "adef   ").unwrap(),
+                   "adef");
+        assert_eq!(&*parse(ident().then_ignore(ws()), "a123@   ").unwrap(),
+                   "a123@");
+        parse(ident(), "1abc").unwrap_err();
+        parse(ident(), "-1").unwrap_err();
+        parse(ident(), "-1test").unwrap_err();
+        parse(ident(), "+1").unwrap_err();
     }
 }
 
