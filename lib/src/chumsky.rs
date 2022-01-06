@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chumsky::prelude::*;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
@@ -45,22 +47,96 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
         )).repeated().ignored()
         .delimited_by(just("/*"), just("*/")).ignored()
     })
-        .map_err_with_span(|e, span| {
-            if span.length() > 2 {
-                assert!(span.1 - span.0 >= 2);
-                e.merge(Error::Unclosed {
-                    label: None,
-                    opened_at: Span(span.0, span.0+2), // we know it's `/ *`
-                    opened: "/*".into(),
-                    expected_at: Span(span.1, span.1),
-                    expected: "*/".into(),
-                    found: None.into(),
-                })
-            } else {
-                // otherwise opening /* is not matched
-                e
-            }
+    .map_err_with_span(|e, span| {
+        if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) &&
+           span.length() > 2
+        {
+            assert!(span.1 - span.0 >= 2);
+            e.merge(Error::Unclosed {
+                label: None,
+                opened_at: Span(span.0, span.0+2), // we know it's `/ *`
+                opened: "/*".into(),
+                expected_at: Span(span.1, span.1),
+                expected: "*/".into(),
+                found: None.into(),
+            })
+        } else {
+            // otherwise opening /* is not matched
+            e
+        }
+    })
+}
+
+fn string() -> impl Parser<char, Box<str>, Error=Error> {
+    escaped_string()
+}
+
+fn expected(s: &'static str) -> BTreeSet<TokenFormat> {
+    [TokenFormat::Kind(s)].into_iter().collect()
+}
+
+fn esc_char() -> impl Parser<char, char, Error=Error> {
+    filter_map(|position, c| match c {
+        '"'|'\\'|'/' => Ok(c),
+        'b' => Ok('\u{0008}'),
+        'f' => Ok('\u{000C}'),
+        'n' => Ok('\n'),
+        'r' => Ok('\r'),
+        't' => Ok('\t'),
+        c => Err(Error::Unexpected {
+            label: Some("invalid escape char"),
+            position,
+            found: c.into(),
+            expected: "\"\\/bfnrt".chars().map(|c| c.into()).collect(),
         })
+    })
+    .or(just('u').ignore_then(
+            filter_map(|position, c: char| c.is_digit(16).then(|| c)
+                .ok_or_else(|| Error::Unexpected {
+                    label: Some("unexpected character"),
+                    position,
+                    found: c.into(),
+                    expected: expected("hexadecimal digit"),
+                }))
+            .repeated()
+            .at_least(1)
+            .at_most(6)
+            .delimited_by(just('{'), just('}'))
+            .try_map(|hex_chars, position| {
+                let s = hex_chars.into_iter().collect::<String>();
+                let c =
+                    u32::from_str_radix(&s, 16).map_err(|e| e.to_string())
+                    .and_then(|n| char::try_from(n).map_err(|e| e.to_string()))
+                    .map_err(|e| Error::ParseError {
+                        label: Some("invalid character code"),
+                        position,
+                        message: e.to_string(),
+                    })?;
+                Ok(c)
+            })
+            .recover_with(skip_until(['}', '"', '\\'], |_| '\0'))))
+}
+
+fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
+    filter(|&c| c != '"' && c != '\\')
+    .or(just('\\').ignore_then(esc_char()))
+    .repeated()
+    .delimited_by(just('"'), just('"'))
+    .map(|val| val.into_iter().collect::<String>().into())
+    .map_err_with_span(|e, span| {
+        if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) {
+            e.merge(Error::Unclosed {
+                label: None,
+                opened_at: Span(span.0, span.0+1), // we know it's `"`
+                opened: '"'.into(),
+                expected_at: Span(span.1, span.1),
+                expected: '"'.into(),
+                found: None.into(),
+            })
+        } else {
+            e
+        }
+    })
 }
 
 /*
@@ -76,16 +152,19 @@ mod test {
     use chumsky::Stream;
     use crate::errors::{ParseError, ParseErrorEnum, AddSource};
     use crate::span::Span;
-    use super::{ws, comment, ml_comment};
-    use miette::IntoDiagnostic;
+    use super::{ws, comment, ml_comment, string};
 
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
-            let left: serde_json::Value =
-                serde_json::from_str(&$left.unwrap_err()).unwrap();
+            let left = $left.unwrap_err();
+            let left = left.replace("}{", "},{"); // bug in miette master
+            let left = left.replace(r#"`\\"`"#, r#"`\"`"#); // bug in miette
+            let left: serde_json::Value = serde_json::from_str(&left).unwrap();
             let right: serde_json::Value =
                 serde_json::from_str($right).unwrap();
-            pretty_assertions::assert_eq!(left, right);
+            //assert_json_diff::assert_json_includes!(
+            //    actual: left, expected: right);
+            assert_json_diff::assert_json_eq!(left, right);
         }
     }
 
@@ -154,7 +233,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "opened at",
+                    {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
                     {"label": "should be closed before",
                     "span": {"offset": 10, "length": 0}}
@@ -171,7 +250,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "opened at",
+                    {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
                     {"label": "should be closed before",
                     "span": {"offset": 14, "length": 0}}
@@ -188,7 +267,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "opened at",
+                    {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
                     {"label": "should be closed before",
                     "span": {"offset": 16, "length": 0}}
@@ -205,7 +284,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "opened at",
+                    {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
                     {"label": "should be closed before",
                     "span": {"offset": 12, "length": 0}}
@@ -222,7 +301,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "opened at",
+                    {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
                     {"label": "should be closed before",
                     "span": {"offset": 3, "length": 0}}
@@ -242,6 +321,124 @@ mod test {
                 "labels": [
                     {"label": "unexpected token",
                     "span": {"offset": 0, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+    }
+
+    #[test]
+    fn parse_str() {
+        assert_eq!(&*parse(string(), r#""hello""#).unwrap(), "hello");
+        assert_eq!(&*parse(string(), r#""""#).unwrap(), "");
+        assert_eq!(&*parse(string(), r#""hel\"lo""#).unwrap(),"hel\"lo");
+        assert_eq!(&*parse(string(), r#""hello\nworld!""#).unwrap(),
+                   "hello\nworld!");
+        assert_eq!(&*parse(string(), r#""\u{1F680}""#).unwrap(), "🚀");
+    }
+
+    #[test]
+    fn parse_str_err() {
+        err_eq!(parse(string(), r#""hello"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed delimiter `\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 1}},
+                    {"label": "should be closed before",
+                    "span": {"offset": 6, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{FFFFFF}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "converted integer out of range for `char`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 5, "length": 8}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{1234567}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `7`, expected `}`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 12, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{1gh}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `g`, expected `}` or hexadecimal digit",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 7, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\x01llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found `x`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid escape char",
+                    "span": {"offset": 4, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        // Tests error recovery
+        err_eq!(parse(string(), r#""he\u{FFFFFF}l\!lo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "converted integer out of range for `char`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 5, "length": 8}}
+                ],
+                "related": []
+            }, {
+                "message":
+                    "found `!`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid escape char",
+                    "span": {"offset": 15, "length": 1}}
                 ],
                 "related": []
             }]

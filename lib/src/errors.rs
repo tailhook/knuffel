@@ -51,7 +51,8 @@ pub struct ParseError {
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub(crate) enum TokenFormat {
     Char(char),
-    Static(&'static str),
+    Token(&'static str),
+    Kind(&'static str),
     Eoi,
 }
 
@@ -63,7 +64,7 @@ pub(crate) enum ParseErrorEnum {
     #[diagnostic()]
     Unexpected {
         label: Option<&'static str>,
-        #[label="unexpected token"]
+        #[label("{}", label.unwrap_or("unexpected token"))]
         position: Span,
         found: TokenFormat,
         expected: BTreeSet<TokenFormat>,
@@ -72,7 +73,7 @@ pub(crate) enum ParseErrorEnum {
     #[diagnostic()]
     Unclosed {
         label: Option<&'static str>,
-        #[label="opened at"]
+        #[label="opened here"]
         opened_at: Span,
         opened: TokenFormat,
         #[label="should be closed before"]
@@ -109,7 +110,7 @@ impl From<char> for TokenFormat {
 
 impl From<&'static str> for TokenFormat {
     fn from(s: &'static str) -> TokenFormat {
-        TokenFormat::Static(s)
+        TokenFormat::Token(s)
     }
 }
 
@@ -117,9 +118,14 @@ impl fmt::Display for TokenFormat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use TokenFormat::*;
         match self {
-            Eoi => write!(f, "end of input"),
+            // do not escape quotes as we use backticks
+            Char('"') => write!(f, "`\"`"),
+            Char('\'') => write!(f, "`\'`"),
+
             Char(c) => write!(f, "`{}`", c.escape_default()),
-            Static(s) => write!(f, "`{}`", s.escape_default()),
+            Token(s) => write!(f, "`{}`", s.escape_default()),
+            Kind(s) => write!(f, "{}", s),
+            Eoi => write!(f, "end of input"),
         }
     }
 }
