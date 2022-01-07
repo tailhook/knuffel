@@ -264,6 +264,10 @@ fn literal() -> impl Parser<char, Literal, Error=Error> {
     ))
 }
 
+fn type_name() -> impl Parser<char, TypeName, Error=Error> {
+    ident().delimited_by(just('('), just(')')).map(TypeName::from_string)
+}
+
 /*
 fn parser<S: Span>() -> impl Parser<char, Document<S>, Error=Simple<char>> {
     todo!()
@@ -277,8 +281,8 @@ mod test {
     use chumsky::Stream;
     use crate::errors::{ParseError, ParseErrorEnum, AddSource};
     use crate::span::Span;
-    use crate::ast::{Literal};
-    use super::{ws, comment, ml_comment, string, ident, literal};
+    use crate::ast::{Literal, TypeName};
+    use super::{ws, comment, ml_comment, string, ident, literal, type_name};
 
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
@@ -672,6 +676,17 @@ mod test {
         assert_eq!(parse(literal(), "true").unwrap(), Literal::Bool(true));
         assert_eq!(parse(literal(), "false").unwrap(), Literal::Bool(false));
         assert_eq!(parse(literal(), "null").unwrap(), Literal::Null);
+    }
+
+    #[test]
+    fn parse_type() {
+        assert_eq!(parse(type_name(), "(abcdef)").unwrap(),
+                   TypeName::from_string("abcdef".into()));
+        assert_eq!(parse(type_name(), "(xx_cd$yy)").unwrap(),
+                   TypeName::from_string("xx_cd$yy".into()));
+        parse(type_name(), "(1abc)").unwrap_err();
+        parse(type_name(), "( abc)").unwrap_err();
+        parse(type_name(), "(abc )").unwrap_err();
     }
 }
 
