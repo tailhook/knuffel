@@ -123,6 +123,8 @@ impl fmt::Display for TokenFormat {
             // do not escape quotes as we use backticks
             Char('"') => write!(f, "`\"`"),
             Char('\'') => write!(f, "`\'`"),
+            // also single backslash should not confuse anybody in this context
+            Char('\\') => write!(f, r"`\`"),
 
             Char(c) => write!(f, "`{}`", c.escape_default()),
             Token(s) => write!(f, "`{}`", s.escape_default()),

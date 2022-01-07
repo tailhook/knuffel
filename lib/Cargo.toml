@@ -17,12 +17,14 @@ chumsky = { git="https://github.com/zesterer/chumsky" }
 knuffel-derive = {path="../derive", optional=true}
 base64 = {version="0.13.0", optional=true}
 #miette = "3.2.0"
-miette = { git="https://github.com/zkat/miette" }
+#miette = { git="https://github.com/zkat/miette" }
+miette = { git="https://github.com/tailhook/miette", branch="json_fix" }
 thiserror = "1.0.30"
 
 [dev-dependencies]
 #miette = {version="3.2.0", features=["fancy"]}
-miette = { git="https://github.com/zkat/miette", features=["fancy"] }
+#miette = { git="https://github.com/zkat/miette", features=["fancy"] }
+miette = { git="https://github.com/tailhook/miette", branch="json_fix", features=["fancy"] }
 assert-json-diff = "2.0.1"
 serde_json = "1.0"
 

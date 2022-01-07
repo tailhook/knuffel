@@ -266,8 +266,6 @@ mod test {
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
             let left = $left.unwrap_err();
-            let left = left.replace("}{", "},{"); // bug in miette master
-            let left = left.replace(r#"\\""#, r#"\""#); // bug in miette
             let left: serde_json::Value = serde_json::from_str(&left).unwrap();
             let right: serde_json::Value =
                 serde_json::from_str($right).unwrap();
