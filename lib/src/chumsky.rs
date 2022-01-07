@@ -248,6 +248,22 @@ fn ident() -> impl Parser<char, Box<str>, Error=Error> {
     choice((bare_ident(), string()))
 }
 
+fn keyword() -> impl Parser<char, Literal, Error=Error> {
+    choice((
+        just("null").to(Literal::Null),
+        just("true").to(Literal::Bool(true)),
+        just("false").to(Literal::Bool(false)),
+    ))
+}
+
+fn literal() -> impl Parser<char, Literal, Error=Error> {
+    choice((
+        string().map(Literal::String),
+        keyword(),
+        //number(),
+    ))
+}
+
 /*
 fn parser<S: Span>() -> impl Parser<char, Document<S>, Error=Simple<char>> {
     todo!()
@@ -261,7 +277,8 @@ mod test {
     use chumsky::Stream;
     use crate::errors::{ParseError, ParseErrorEnum, AddSource};
     use crate::span::Span;
-    use super::{ws, comment, ml_comment, string, ident};
+    use crate::ast::{Literal};
+    use super::{ws, comment, ml_comment, string, ident, literal};
 
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
@@ -648,6 +665,13 @@ mod test {
         parse(ident(), "-1").unwrap_err();
         parse(ident(), "-1test").unwrap_err();
         parse(ident(), "+1").unwrap_err();
+    }
+
+    #[test]
+    fn parse_literal() {
+        assert_eq!(parse(literal(), "true").unwrap(), Literal::Bool(true));
+        assert_eq!(parse(literal(), "false").unwrap(), Literal::Bool(false));
+        assert_eq!(parse(literal(), "null").unwrap(), Literal::Null);
     }
 }
 
