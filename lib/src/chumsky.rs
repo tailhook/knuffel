@@ -8,6 +8,12 @@ use crate::span::{Span, Spanned};
 use crate::errors::{ParseErrorEnum as Error, TokenFormat};
 
 
+fn begin_comment(which: char) -> impl Parser<char, (), Error=Error> + Clone {
+    just('/')
+    .map_err(|e: Error| e.with_no_expected())
+    .ignore_then(just(which).ignored())
+}
+
 fn newline() -> impl Parser<char, (), Error=Error> {
     just('\r')
         .or_not()
@@ -77,9 +83,7 @@ fn ws() -> impl Parser<char, (), Error=Error> {
 }
 
 fn comment() -> impl Parser<char, (), Error=Error> {
-    just('/')
-    .map_err(|e: Error| e.with_no_expected())
-    .ignore_then(just('/'))
+    begin_comment('/')
     .then(take_until(newline().or(end()))).ignored()
 }
 
@@ -90,7 +94,7 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
             none_of('*').ignored(),
             just('*').then_ignore(none_of('/').rewind()).ignored(),
         )).repeated().ignored()
-        .delimited_by(just("/*"), just("*/")).ignored()
+        .delimited_by(begin_comment('*'), just("*/"))
     })
     .map_err_with_span(|e, span| {
         if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) &&
@@ -368,8 +372,6 @@ fn value() -> impl Parser<char, Value<Span>, Error=Error> {
 fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     use PropOrArg::*;
     choice((
-        spanned(bare_ident()).then_ignore(just('=')).then(value())
-            .map(|(name, value)| Prop(name, value)),
         spanned(literal()).then(just('=').ignore_then(value()).or_not())
             .try_map(|(name, value), span| {
                 let name_span = name.span;
@@ -391,14 +393,14 @@ fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
                                 TokenFormat::Kind("string"),
                             ].into_iter().collect(),
                         })
-                    } (Literal::Int(_) | Literal::Decimal(_), Some(_)) => {
+                    }
+                    (Literal::Int(_) | Literal::Decimal(_), Some(_)) => {
                         Err(Error::MessageWithHelp {
                             label: Some("unexpected number"),
                             position: name_span,
                             message: "numbers cannot be used as property names"
                                 .into(),
-                            help: "consider encosing \
-                                with double quotes \"..\"",
+                            help: "consider enclosing in double quotes \"..\"",
                         })
                     }
                     (value, None) => Ok(Arg(Value {
@@ -410,12 +412,37 @@ fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
                     })),
                 }
             }),
+        spanned(bare_ident()).then(just('=').ignore_then(value()).or_not())
+            .validate(|(name, value), span, emit| {
+                if value.is_none() {
+                    emit(Error::MessageWithHelp {
+                        label: Some("unexpected identifier"),
+                        position: span,
+                        message: "identifiers cannot be used as arguments"
+                            .into(),
+                        help: "consider enclosing in double quotes \"..\"",
+                    });
+                }
+                (name, value)
+            })
+            .map(|(name, value)| {
+                if let Some(value) = value {
+                    Prop(name, value)
+                } else {
+                    // this is invalid, but we already emitted error
+                    // in validate() above, so doing a sane fallback
+                    Arg(Value {
+                        type_name: None,
+                        literal: name.map(Literal::String),
+                    })
+                }
+            }),
         type_name_value().map(Arg),
     ))
 }
 
 fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
-    just("/-")
+    begin_comment('-')
         .ignore_then(node_space().repeated())
         .ignore_then(prop_or_arg_inner())
         .map(|_| PropOrArg::Ignore)
@@ -457,7 +484,7 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
                 .repeated()
             )
             .then(node_space().repeated()
-                  .ignore_then(just("/-")
+                  .ignore_then(begin_comment('-')
                                .then_ignore(node_space().repeated())
                                .or_not())
                   .then(spanned(braced_nodes))
@@ -489,7 +516,7 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
                 node
             });
 
-        just("/-").ignored().then_ignore(node_space().repeated()).or_not()
+        begin_comment('-').then_ignore(node_space().repeated()).or_not()
         .then(spanned(node))
             .separated_by(line_space().repeated())
             .allow_leading().allow_trailing()
@@ -671,7 +698,7 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "found `x`, expected `/`",
+                "message": "found `x`",
                 "severity": "error",
                 "filename": "",
                 "labels": [
@@ -961,7 +988,7 @@ mod test {
                     {"label": "unexpected number",
                     "span": {"offset": 5, "length": 1}}
                 ],
-                "help": "consider encosing with double quotes \"..\"",
+                "help": "consider enclosing in double quotes \"..\"",
                 "related": []
             }]
         }"#);
@@ -1138,14 +1165,84 @@ mod test {
                 "related": []
             }]
         }"#);
-        /* TODO
-
         err_eq!(parse(nodes(), "hello world"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }]
         }"#);
 
         err_eq!(parse(nodes(), "hello world {"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }, {
+                "message": "unclosed curly braces `{`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 12, "length": 1}},
+                    {"label": "expected `}`",
+                    "span": {"offset": 13, "length": 0}}
+                ],
+                "related": []
+            }]
         }"#);
-        */
+
+        err_eq!(parse(nodes(), "-1 +2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "1 + 2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }]
+        }"#);
     }
 
     #[test]
