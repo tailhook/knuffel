@@ -194,25 +194,29 @@ fn esc_char() -> impl Parser<char, char, Error=Error> {
 }
 
 fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
-    filter(|&c| c != '"' && c != '\\')
-    .or(just('\\').ignore_then(esc_char()))
-    .repeated()
-    .delimited_by(just('"'), just('"'))
-    .map(|val| val.into_iter().collect::<String>().into())
-    .map_err_with_span(|e, span| {
-        if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) {
-            e.merge(Error::Unclosed {
-                label: "string",
-                opened_at: Span(span.0, span.0+1), // we know it's `"`
-                opened: '"'.into(),
-                expected_at: Span(span.1, span.1),
-                expected: '"'.into(),
-                found: None.into(),
-            })
-        } else {
-            e
-        }
-    })
+    just('"')
+    .ignore_then(
+        filter(|&c| c != '"' && c != '\\')
+        .or(just('\\').ignore_then(esc_char()))
+        .repeated()
+        .then_ignore(just('"'))
+        .map(|val| val.into_iter().collect::<String>().into())
+        .map_err_with_span(|e, span| {
+            if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
+            {
+                e.merge(Error::Unclosed {
+                    label: "string",
+                    opened_at: Span(span.0-1, span.0), // we know it's `"`
+                    opened: '"'.into(),
+                    expected_at: Span(span.1, span.1),
+                    expected: '"'.into(),
+                    found: None.into(),
+                })
+            } else {
+                e
+            }
+        })
+    )
 }
 
 fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
@@ -427,8 +431,22 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
     use PropOrArg::*;
     recursive(|nodes| {
         let braced_nodes = nodes
-            .delimited_by(just('{'), just('}'));
-            // TODO(tailhook) add recovery
+            .delimited_by(just('{'), just('}'))
+            .map_err_with_span(|e, span| {
+                if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
+                {
+                    e.merge(Error::Unclosed {
+                        label: "curly braces",
+                        opened_at: Span(span.0, span.0+1), // we know it's `{`
+                        opened: '{'.into(),
+                        expected_at: Span(span.1, span.1),
+                        expected: '}'.into(),
+                        found: None.into(),
+                    })
+                } else {
+                    e
+                }
+            });
 
         let node = spanned(type_name()).or_not()
             .then(spanned(ident()))
@@ -1099,6 +1117,35 @@ mod test {
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 0);
 
+    }
+
+    #[test]
+    fn parse_node_err() {
+        err_eq!(parse(nodes(), "hello{"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed curly braces `{`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 5, "length": 1}},
+                    {"label": "expected `}`",
+                    "span": {"offset": 6, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        /* TODO
+
+        err_eq!(parse(nodes(), "hello world"), r#"{
+        }"#);
+
+        err_eq!(parse(nodes(), "hello world {"), r#"{
+        }"#);
+        */
     }
 
     #[test]
