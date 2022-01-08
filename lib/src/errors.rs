@@ -23,26 +23,34 @@ pub(crate) struct AddSource<E: Diagnostic + 'static> {
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
 pub enum RealError {
-    //#[error(transparent)]
-    #[error("error parsing KDL text")]
+    #[error("syntax error")]
     #[diagnostic(transparent)]
-    Parse(Box<dyn Diagnostic + Send + Sync + 'static>),
-    /*
-    #[error(transparent)]
-    TypeName(Box<dyn Diagnostic + Send + Sync + 'static>),
-    #[error(transparent)]
-    ScalarType(Box<dyn Diagnostic + Send + Sync + 'static>),
-    #[error(transparent)]
-    Convert(Box<dyn Diagnostic + Send + Sync + 'static>),
-    #[error(transparent)]
-    Custom(Box<dyn Diagnostic + Send + Sync + 'static>),
-    */
+    Syntax(Box<dyn Diagnostic + Send + Sync + 'static>),
+    #[error("decode error")]
+    #[diagnostic(transparent)]
+    Decode(Box<dyn Diagnostic + Send + Sync + 'static>),
 }
 
 #[derive(Debug, Diagnostic, Error)]
-#[error("error parsing KDL text")]
+pub enum DecodeError<S: Span> {
+    #[error("invalid type")]
+    #[diagnostic()]
+    TypeName { span: S },
+    #[error("invalid scalar type")]
+    #[diagnostic()]
+    ScalarType {},
+    #[error("invalid value")]
+    #[diagnostic()]
+    Convert {},
+    #[error(transparent)]
+    Custom(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+
+#[derive(Debug, Diagnostic, Error)]
+#[error("KDL syntax error")]
 #[diagnostic()]
-pub struct ParseError<S: Span> {
+pub(crate) struct ParseError<S: Span> {
     #[related]
     pub(crate) errors: Vec<AddSource<ParseErrorEnum<S>>>,
 }

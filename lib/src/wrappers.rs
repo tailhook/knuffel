@@ -23,7 +23,7 @@ pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
                 }
             }).collect(),
         };
-        RealError::Parse(Box::new(e))
+        RealError::Syntax(Box::new(e))
     })
 }
 
