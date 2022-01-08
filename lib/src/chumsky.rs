@@ -471,9 +471,17 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
                 node
             });
 
-        spanned(node)
+        just("/-").ignored().then_ignore(node_space().repeated()).or_not()
+        .then(spanned(node))
             .separated_by(line_space().repeated())
             .allow_leading().allow_trailing()
+            .map(|vec| vec.into_iter().filter_map(|(comment, node)| {
+                if comment.is_none() {
+                    Some(node)
+                } else {
+                    None
+                }
+            }).collect())
     })
 }
 
@@ -1090,6 +1098,20 @@ mod test {
         let nval = single(parse(nodes(), "parent /-{\nchild\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 0);
+
+    }
+
+    #[test]
+    fn parse_nodes() {
+        let nval = parse(nodes(), "parent {\n/-  child\n}").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "parent");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "/-parent {\n  child\n}\nsecond").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "second");
+        assert_eq!(nval[0].children().len(), 0);
 
     }
 
