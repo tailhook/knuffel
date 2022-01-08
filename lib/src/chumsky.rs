@@ -18,6 +18,7 @@ fn newline() -> impl Parser<char, (), Error=Error> {
         .or(just('\u{2028}')) // Line separator
         .or(just('\u{2029}')) // Paragraph separator
         .ignored()
+    .map_err(|e: Error| e.with_expected_kind("newline"))
 }
 
 fn ws_char() -> impl Parser<char, (), Error=Error> {
@@ -76,7 +77,10 @@ fn ws() -> impl Parser<char, (), Error=Error> {
 }
 
 fn comment() -> impl Parser<char, (), Error=Error> {
-    just("//").then(take_until(newline().or(end()))).ignored()
+    just('/')
+    .map_err(|e: Error| e.with_no_expected())
+    .ignore_then(just('/'))
+    .then(take_until(newline().or(end()))).ignored()
 }
 
 fn ml_comment() -> impl Parser<char, (), Error=Error> {
@@ -143,7 +147,7 @@ fn string() -> impl Parser<char, Box<str>, Error=Error> {
     raw_string().or(escaped_string())
 }
 
-fn expected(s: &'static str) -> BTreeSet<TokenFormat> {
+fn expected_kind(s: &'static str) -> BTreeSet<TokenFormat> {
     [TokenFormat::Kind(s)].into_iter().collect()
 }
 
@@ -168,7 +172,7 @@ fn esc_char() -> impl Parser<char, char, Error=Error> {
                     label: Some("unexpected character"),
                     position,
                     found: c.into(),
-                    expected: expected("hexadecimal digit"),
+                    expected: expected_kind("hexadecimal digit"),
                 }))
             .repeated()
             .at_least(1)
@@ -179,7 +183,7 @@ fn esc_char() -> impl Parser<char, char, Error=Error> {
                 let c =
                     u32::from_str_radix(&s, 16).map_err(|e| e.to_string())
                     .and_then(|n| char::try_from(n).map_err(|e| e.to_string()))
-                    .map_err(|e| Error::ParseError {
+                    .map_err(|e| Error::Message {
                         label: Some("invalid character code"),
                         position,
                         message: e.to_string(),
@@ -221,27 +225,26 @@ fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
     .map(|v| v.into_iter().collect()).try_map(|s: String, position| {
         match &s[..] {
             "true" => Err(Error::Unexpected {
-                label: None,
+                label: Some("keyword"),
                 position,
                 found: TokenFormat::Token("true"),
-                expected: expected("identifier"),
+                expected: expected_kind("identifier"),
             }),
             "false" => Err(Error::Unexpected {
-                label: None,
+                label: Some("keyword"),
                 position,
                 found: TokenFormat::Token("false"),
-                expected: expected("identifier"),
+                expected: expected_kind("identifier"),
             }),
             "null" => Err(Error::Unexpected {
-                label: None,
+                label: Some("keyword"),
                 position,
                 found: TokenFormat::Token("null"),
-                expected: expected("identifier"),
+                expected: expected_kind("identifier"),
             }),
             _ => Ok(s.into()),
         }
     })
-    .labelled("identifier")
 }
 
 fn ident() -> impl Parser<char, Box<str>, Error=Error> {
@@ -348,9 +351,14 @@ enum PropOrArg<S> {
     Ignore,
 }
 
+fn type_name_value() -> impl Parser<char, Value<Span>, Error=Error> {
+    spanned(type_name()).then(spanned(literal()))
+    .map(|(type_name, literal)| Value { type_name: Some(type_name), literal })
+}
+
 fn value() -> impl Parser<char, Value<Span>, Error=Error> {
-    spanned(type_name()).or_not().then(spanned(literal()))
-    .map(|(type_name, literal)| Value { type_name, literal })
+    type_name_value()
+    .or(spanned(literal()).map(|literal| Value { type_name: None, literal }))
 }
 
 fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
@@ -358,15 +366,47 @@ fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     choice((
         spanned(bare_ident()).then_ignore(just('=')).then(value())
             .map(|(name, value)| Prop(name, value)),
-        spanned(string()).then(just('=').ignore_then(value()).or_not())
-            .map(|(name, value)| match value {
-                Some(value) => Prop(name, value),
-                None => Arg(Value {
-                    type_name: None,
-                    literal: name.map(Literal::String),
-                }),
+        spanned(literal()).then(just('=').ignore_then(value()).or_not())
+            .try_map(|(name, value), span| {
+                let name_span = name.span;
+                match (name.value, value) {
+                    (Literal::String(s), Some(value)) => {
+                        let name = Spanned {
+                            span: name_span,
+                            value: s,
+                        };
+                        Ok(Prop(name, value))
+                    }
+                    (Literal::Bool(_) | Literal::Null, Some(_)) => {
+                        Err(Error::Unexpected {
+                            label: Some("unexpected keyword"),
+                            position: name_span,
+                            found: TokenFormat::Kind("keyword"),
+                            expected: [
+                                TokenFormat::Kind("identifier"),
+                                TokenFormat::Kind("string"),
+                            ].into_iter().collect(),
+                        })
+                    } (Literal::Int(_) | Literal::Decimal(_), Some(_)) => {
+                        Err(Error::MessageWithHelp {
+                            label: Some("unexpected number"),
+                            position: name_span,
+                            message: "numbers cannot be used as property names"
+                                .into(),
+                            help: "consider encosing \
+                                with double quotes \"..\"",
+                        })
+                    }
+                    (value, None) => Ok(Arg(Value {
+                        type_name: None,
+                        literal: Spanned {
+                            span: name_span,
+                            value,
+                        },
+                    })),
+                }
             }),
-        value().map(Arg),
+        type_name_value().map(Arg),
     ))
 }
 
@@ -664,7 +704,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "unexpected token",
+                    {"label": "invalid character code",
                     "span": {"offset": 5, "length": 8}}
                 ],
                 "related": []
@@ -726,7 +766,7 @@ mod test {
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "unexpected token",
+                    {"label": "invalid character code",
                     "span": {"offset": 5, "length": 8}}
                 ],
                 "related": []
@@ -843,6 +883,62 @@ mod test {
         assert_eq!(parse(literal(), "true").unwrap(), Literal::Bool(true));
         assert_eq!(parse(literal(), "false").unwrap(), Literal::Bool(false));
         assert_eq!(parse(literal(), "null").unwrap(), Literal::Null);
+    }
+
+    #[test]
+    fn exclude_keywords() {
+        parse(nodes(), "item true").unwrap();
+
+        err_eq!(parse(nodes(), "true \"item\""), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found `true`, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "keyword",
+                    "span": {"offset": 0, "length": 4}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "item false=true"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found keyword, expected identifier or string",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected keyword",
+                    "span": {"offset": 5, "length": 5}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "item 2=2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "numbers cannot be used as property names",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 5, "length": 1}}
+                ],
+                "help": "consider encosing with double quotes \"..\"",
+                "related": []
+            }]
+        }"#);
     }
 
     #[test]

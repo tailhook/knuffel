@@ -86,12 +86,21 @@ pub(crate) enum ParseErrorEnum {
     },
     #[error("{}", message)]
     #[diagnostic()]
-    ParseError {
+    Message {
         label: Option<&'static str>,
-        #[label="unexpected token"]
+        #[label("{}", label.unwrap_or("unexpected token"))]
         position: Span,
         message: String,
-    }
+    },
+    #[error("{}", message)]
+    #[diagnostic(help("{}", help))]
+    MessageWithHelp {
+        label: Option<&'static str>,
+        #[label("{}", label.unwrap_or("unexpected token"))]
+        position: Span,
+        message: String,
+        help: &'static str,
+    },
 }
 
 
@@ -179,7 +188,8 @@ impl ParseErrorEnum {
         match self {
             Unexpected { position, .. } => position,
             Unclosed { expected_at, .. } => expected_at,
-            ParseError { position, .. } => position,
+            Message { position, .. } => position,
+            MessageWithHelp { position, .. } => position,
         }
     }
     pub(crate) fn with_expected_token(mut self, token: &'static str) -> Self {
@@ -187,6 +197,26 @@ impl ParseErrorEnum {
         match &mut self {
             Unexpected { ref mut expected, .. } => {
                 *expected = [TokenFormat::Token(token)].into_iter().collect();
+            }
+            _ => {},
+        }
+        self
+    }
+    pub(crate) fn with_expected_kind(mut self, token: &'static str) -> Self {
+        use ParseErrorEnum::*;
+        match &mut self {
+            Unexpected { ref mut expected, .. } => {
+                *expected = [TokenFormat::Kind(token)].into_iter().collect();
+            }
+            _ => {},
+        }
+        self
+    }
+    pub(crate) fn with_no_expected(mut self) -> Self {
+        use ParseErrorEnum::*;
+        match &mut self {
+            Unexpected { ref mut expected, .. } => {
+                *expected = BTreeSet::new();
             }
             _ => {},
         }
@@ -214,7 +244,8 @@ impl chumsky::Error<char> for ParseErrorEnum {
         match self {
             Unexpected { ref mut label, .. } => *label = Some(new_label),
             Unclosed { ref mut label, .. } => *label = new_label,
-            ParseError { ref mut label, .. } => *label = Some(new_label),
+            Message { ref mut label, .. } => *label = Some(new_label),
+            MessageWithHelp { ref mut label, .. } => *label = Some(new_label),
         }
         self
     }
