@@ -1,27 +1,31 @@
-use combine::Parser;
-use combine::easy::Stream;
-use combine::stream::state;
+use ::chumsky::{Parser, Stream};
 
 use crate::ast::Document;
 use crate::errors::RawError;
-use crate::errors::{RealError, ParseError, ParseErrorEnum};
-use crate::grammar::{self, SpanState};
+use crate::errors::{RealError, ParseError, ParseErrorEnum, AddSource};
+use crate::chumsky;
 use crate::span::{Span, SimpleContext};
 
 
-pub fn raw_parse(text: &str) -> Result<Document<Span>, RawError<Span>> {
-    let (doc, _) = grammar::document().parse(state::Stream {
-        stream: Stream(text),
-        state: SpanState {
-            span_context: SimpleContext,
-            data: text,
-        },
-    }).map_err(|error| {
-        error
-            .map_position(|p| p.translate_position(text))
-            .map_position(|p| Span(p, p))
-    })?;
-    Ok(doc)
+pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
+    chumsky::document()
+    .parse(Stream::from_iter(
+        Span(text.len(), text.len()),
+        text.char_indices()
+            .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
+    ))
+    .map_err(|errors| {
+        let source: std::sync::Arc<String> = text.to_string().into();
+        let e = ParseError {
+            errors: errors.into_iter().map(|error| {
+                AddSource {
+                    source: source.clone(),
+                    error,
+                }
+            }).collect(),
+        };
+        RealError::Parse(e)
+    })
 }
 
 #[test]

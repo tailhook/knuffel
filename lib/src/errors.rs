@@ -24,6 +24,7 @@ pub(crate) struct AddSource<E: Diagnostic + 'static> {
 }
 
 #[derive(Debug, Diagnostic, Error)]
+#[non_exhaustive]
 pub enum RealError {
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -181,12 +182,22 @@ impl ParseErrorEnum {
             ParseError { position, .. } => position,
         }
     }
+    pub(crate) fn with_expected_token(mut self, token: &'static str) -> Self {
+        use ParseErrorEnum::*;
+        match &mut self {
+            Unexpected { ref mut expected, .. } => {
+                *expected = [TokenFormat::Token(token)].into_iter().collect();
+            }
+            _ => {},
+        }
+        self
+    }
 }
 
 impl chumsky::Error<char> for ParseErrorEnum {
     type Span = Span;
     type Label = &'static str;
-    fn expected_input_found<Iter>(mut span: Self::Span, expected: Iter,
+    fn expected_input_found<Iter>(span: Self::Span, expected: Iter,
         found: Option<char>)
         -> Self
         where Iter: IntoIterator<Item = Option<char>>

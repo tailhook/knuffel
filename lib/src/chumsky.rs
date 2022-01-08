@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BTreeMap};
 
 use chumsky::prelude::*;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
-use crate::ast::{SpannedName, SpannedChildren, Document};
-use crate::span::Span;
+use crate::ast::{SpannedName, SpannedChildren, SpannedNode, Document};
+use crate::span::{Span, Spanned};
 use crate::errors::{ParseErrorEnum as Error, TokenFormat};
 
 
@@ -250,9 +250,15 @@ fn ident() -> impl Parser<char, Box<str>, Error=Error> {
 
 fn keyword() -> impl Parser<char, Literal, Error=Error> {
     choice((
-        just("null").to(Literal::Null),
-        just("true").to(Literal::Bool(true)),
-        just("false").to(Literal::Bool(false)),
+        just("null")
+            .map_err(|e: Error| e.with_expected_token("null"))
+            .to(Literal::Null),
+        just("true")
+            .map_err(|e: Error| e.with_expected_token("true"))
+            .to(Literal::Bool(true)),
+        just("false")
+            .map_err(|e: Error| e.with_expected_token("false"))
+            .to(Literal::Bool(false)),
     ))
 }
 
@@ -260,7 +266,7 @@ fn literal() -> impl Parser<char, Literal, Error=Error> {
     choice((
         string().map(Literal::String),
         keyword(),
-        //number(),
+        // TODO(tailhook) number(),
     ))
 }
 
@@ -268,11 +274,103 @@ fn type_name() -> impl Parser<char, TypeName, Error=Error> {
     ident().delimited_by(just('('), just(')')).map(TypeName::from_string)
 }
 
-/*
-fn parser<S: Span>() -> impl Parser<char, Document<S>, Error=Simple<char>> {
-    todo!()
+fn spanned<T, P>(p: P) -> impl Parser<char, Spanned<T, Span>, Error=Error>
+    where P: Parser<char, T, Error=Error>
+{
+    p.map_with_span(|value, span| Spanned { span, value })
 }
-*/
+
+fn esc_line() -> impl Parser<char, (), Error=Error> {
+    just('\\')
+        .ignore_then(ws().repeated())
+        .ignore_then(comment().or(newline()))
+}
+
+fn node_space() -> impl Parser<char, (), Error=Error> {
+    ws().or(esc_line())
+}
+
+fn node_terminator() -> impl Parser<char, (), Error=Error> {
+    choice((newline(), comment(), just(';').ignored(), end()))
+}
+
+enum PropOrArg<S> {
+    Prop(SpannedName<S>, Value<S>),
+    Arg(Value<S>),
+}
+
+fn value() -> impl Parser<char, Value<Span>, Error=Error> {
+    spanned(type_name()).or_not().then(spanned(literal()))
+    .map(|(type_name, literal)| Value { type_name, literal })
+}
+
+fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+    use PropOrArg::*;
+    choice((
+        spanned(bare_ident()).then_ignore(just('=')).then(value())
+            .map(|(name, value)| Prop(name, value)),
+        spanned(string()).then(just('=').ignore_then(value()).or_not())
+            .map(|(name, value)| match value {
+                Some(value) => Prop(name, value),
+                None => Arg(Value {
+                    type_name: None,
+                    literal: name.map(Literal::String),
+                }),
+            }),
+        spanned(keyword())
+            .map(|literal| Arg(Value { type_name: None, literal })),
+        // TODO(tailhook) number
+        value().map(Arg),
+    ))
+}
+
+fn line_space() -> impl Parser<char, (), Error=Error> {
+    newline().or(ws()).or(comment())
+}
+
+fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
+    use PropOrArg::*;
+    recursive(|nodes| {
+        let node = spanned(type_name()).or_not()
+            .then(spanned(ident()))
+            .then(node_space().repeated().at_least(1)
+                  .ignore_then(prop_or_arg())
+                  .repeated())
+            .then(node_space().repeated()
+                  .ignore_then(spanned(
+                          nodes.delimited_by(just('{'), just('}'))
+                  ))
+                  .or_not())
+            .then_ignore(node_terminator())
+            .map(|(((type_name, node_name), line_items), children)| {
+                let mut node = Node {
+                    type_name,
+                    node_name,
+                    properties: BTreeMap::new(),
+                    arguments: Vec::new(),
+                    children,
+                };
+                for item in line_items {
+                    match item {
+                        Prop(name, value) => {
+                            node.properties.insert(name, value);
+                        }
+                        Arg(value) => {
+                            node.arguments.push(value);
+                        }
+                    }
+                }
+                node
+            });
+        spanned(node)
+            .separated_by(line_space().repeated())
+            .allow_leading().allow_trailing()
+    })
+}
+
+pub(crate) fn document() -> impl Parser<char, Document<Span>, Error=Error> {
+    nodes().then_ignore(end()).map(|nodes| Document { nodes })
+}
 
 #[cfg(test)]
 mod test {
@@ -283,6 +381,7 @@ mod test {
     use crate::span::Span;
     use crate::ast::{Literal, TypeName};
     use super::{ws, comment, ml_comment, string, ident, literal, type_name};
+    use super::{nodes};
 
     macro_rules! err_eq {
         ($left: expr, $right: expr) => {
@@ -687,6 +786,147 @@ mod test {
         parse(type_name(), "(1abc)").unwrap_err();
         parse(type_name(), "( abc)").unwrap_err();
         parse(type_name(), "(abc )").unwrap_err();
+    }
+
+    #[test]
+    fn parse_node() {
+        fn single<T, E: std::fmt::Debug>(r: Result<Vec<T>, E>) -> T {
+            let mut v = r.unwrap();
+            assert_eq!(v.len(), 1);
+            v.remove(0)
+        }
+
+        let nval = single(parse(nodes(), "hello"));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = single(parse(nodes(), "\"123\""));
+        assert_eq!(nval.node_name.as_ref(), "123");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = single(parse(nodes(), "(typ)other"));
+        assert_eq!(nval.node_name.as_ref(), "other");
+        assert_eq!(nval.type_name.as_ref().map(|x| &***x), Some("typ"));
+
+        let nval = single(parse(nodes(), "(\"std::duration\")\"timeout\""));
+        assert_eq!(nval.node_name.as_ref(), "timeout");
+        assert_eq!(nval.type_name.as_ref().map(|x| &***x),
+                   Some("std::duration"));
+
+        let nval = single(parse(nodes(), "hello \"arg1\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = single(parse(nodes(), "node \"true\""));
+        assert_eq!(nval.node_name.as_ref(), "node");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("true".into()));
+
+        let nval = single(parse(nodes(), "hello (string)\"arg1\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&***nval.arguments[0].type_name.as_ref().unwrap(),
+                   "string");
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = single(parse(nodes(), "hello key=(string)\"arg1\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&***nval.properties.get("key").unwrap()
+                   .type_name.as_ref().unwrap(),
+                   "string");
+        assert_eq!(&*nval.properties.get("key").unwrap().literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = single(parse(nodes(), "hello key=\"arg1\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&*nval.properties.get("key").unwrap().literal,
+                   &Literal::String("arg1".into()));
+
+        let nval = single(parse(nodes(), "parent {\nchild\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child");
+
+        let nval = single(parse(nodes(), "parent {\nchild1\nchild2\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 2);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child1");
+        assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
+                   "child2");
+
+        let nval = single(parse(nodes(), "parent{\nchild3\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child3");
+
+        let nval = single(parse(nodes(), "parent \"x\"=1 {\nchild4\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child4");
+
+        let nval = single(parse(nodes(), "parent \"x\" {\nchild4\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child4");
+
+        let nval = single(parse(nodes(), "parent \"x\"{\nchild5\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.children().len(), 1);
+        assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
+                   "child5");
+
+        let nval = single(parse(nodes(), "hello /-\"skip_arg\" \"arg2\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg2".into()));
+
+        let nval = single(parse(nodes(), "hello /- \"skip_arg\" \"arg2\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 1);
+        assert_eq!(nval.properties.len(), 0);
+        assert_eq!(&*nval.arguments[0].literal,
+                   &Literal::String("arg2".into()));
+
+        let nval = single(parse(nodes(), "hello prop1=\"1\" /-prop1=\"2\""));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+        assert_eq!(nval.arguments.len(), 0);
+        assert_eq!(nval.properties.len(), 1);
+        assert_eq!(&*nval.properties.get("prop1").unwrap().literal,
+                   &Literal::String("1".into()));
+
+        let nval = single(parse(nodes(), "parent /-{\nchild\n}"));
+        assert_eq!(nval.node_name.as_ref(), "parent");
+        assert_eq!(nval.children().len(), 0);
+
     }
 }
 
