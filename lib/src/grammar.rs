@@ -4,17 +4,20 @@ use chumsky::prelude::*;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
 use crate::ast::{SpannedName, SpannedNode, Document};
-use crate::span::{Span, Spanned};
+use crate::span::{Spanned};
+use crate::traits::{Span};
 use crate::errors::{ParseErrorEnum as Error, TokenFormat};
 
 
-fn begin_comment(which: char) -> impl Parser<char, (), Error=Error> + Clone {
+fn begin_comment<S: Span>(which: char)
+    -> impl Parser<char, (), Error=Error<S>> + Clone
+{
     just('/')
-    .map_err(|e: Error| e.with_no_expected())
+    .map_err(|e: Error<S>| e.with_no_expected())
     .ignore_then(just(which).ignored())
 }
 
-fn newline() -> impl Parser<char, (), Error=Error> {
+fn newline<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     just('\r')
         .or_not()
         .ignore_then(just('\n'))
@@ -24,10 +27,10 @@ fn newline() -> impl Parser<char, (), Error=Error> {
         .or(just('\u{2028}')) // Line separator
         .or(just('\u{2029}')) // Paragraph separator
         .ignored()
-    .map_err(|e: Error| e.with_expected_kind("newline"))
+    .map_err(|e: Error<S>| e.with_expected_kind("newline"))
 }
 
-fn ws_char() -> impl Parser<char, (), Error=Error> {
+fn ws_char<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     filter(|c| matches!(c,
         '\t' | ' ' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200A}' |
@@ -37,7 +40,7 @@ fn ws_char() -> impl Parser<char, (), Error=Error> {
     .ignored()
 }
 
-fn id_char() -> impl Parser<char, char, Error=Error> {
+fn id_char<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
     filter(|c| !matches!(c,
         '\u{0000}'..='\u{0021}' |
         '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
@@ -48,10 +51,10 @@ fn id_char() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
-    .map_err(|e: Error| e.with_expected_kind("letter"))
+    .map_err(|e: Error<S>| e.with_expected_kind("letter"))
 }
 
-fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
+fn id_sans_dig<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
     filter(|c| !matches!(c,
         '0'..='9' |
         '\u{0000}'..='\u{0020}' |
@@ -63,10 +66,10 @@ fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
-    .map_err(|e: Error| e.with_expected_kind("letter"))
+    .map_err(|e: Error<S>| e.with_expected_kind("letter"))
 }
 
-fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
+fn id_sans_sign_dig<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
     filter(|c| !matches!(c,
         '-'| '+' | '0'..='9' |
         '\u{0000}'..='\u{0020}' |
@@ -78,21 +81,33 @@ fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
-    .map_err(|e: Error| e.with_expected_kind("letter"))
+    .map_err(|e: Error<S>| e.with_expected_kind("letter"))
 }
 
-fn ws() -> impl Parser<char, (), Error=Error> {
+fn ws<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     ws_char().repeated().at_least(1).ignored().or(ml_comment())
     .map_err(|e| e.with_expected_kind("whitespace"))
 }
 
-fn comment() -> impl Parser<char, (), Error=Error> {
+fn comment<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     begin_comment('/')
     .then(take_until(newline().or(end()))).ignored()
 }
 
-fn ml_comment() -> impl Parser<char, (), Error=Error> {
-    recursive::<_, _, _, _, Error>(|comment| {
+fn at_start<S: Span>(span: &S, chars: usize) -> S {
+    S::new(span.context(), span.start()..span.start()+chars)
+}
+
+fn at_end<S: Span>(span: &S) -> S {
+    S::new(span.context(), span.end()..span.end())
+}
+
+fn before_start<S: Span>(span: &S, chars: usize) -> S {
+    S::new(span.context(), span.start()-chars..span.start())
+}
+
+fn ml_comment<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
+    recursive::<_, _, _, _, Error<S>>(|comment| {
         choice((
             comment,
             none_of('*').ignored(),
@@ -104,12 +119,11 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
         if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) &&
            span.length() > 2
         {
-            assert!(span.1 - span.0 >= 2);
             e.merge(Error::Unclosed {
                 label: "comment",
-                opened_at: Span(span.0, span.0+2), // we know it's `/ *`
+                opened_at: at_start(&span, 2),
                 opened: "/*".into(),
-                expected_at: Span(span.1, span.1),
+                expected_at: at_end(&span),
                 expected: "*/".into(),
                 found: None.into(),
             })
@@ -120,7 +134,7 @@ fn ml_comment() -> impl Parser<char, (), Error=Error> {
     })
 }
 
-fn raw_string() -> impl Parser<char, Box<str>, Error=Error> {
+fn raw_string<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     just('r')
         .ignore_then(just('#').repeated().map(|v| v.len()))
         .then_ignore(just('"'))
@@ -135,9 +149,9 @@ fn raw_string() -> impl Parser<char, Box<str>, Error=Error> {
                 {
                     e.merge(Error::Unclosed {
                         label: "raw string",
-                        opened_at: Span(span.0 - sharp_num - 2, span.0),
+                        opened_at: before_start(&span, sharp_num+2),
                         opened: TokenFormat::OpenRaw(sharp_num),
-                        expected_at: Span(span.1, span.1),
+                        expected_at: at_end(&span),
                         expected: TokenFormat::CloseRaw(sharp_num),
                         found: None.into(),
                     })
@@ -151,7 +165,7 @@ fn raw_string() -> impl Parser<char, Box<str>, Error=Error> {
     })
 }
 
-fn string() -> impl Parser<char, Box<str>, Error=Error> {
+fn string<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     raw_string().or(escaped_string())
 }
 
@@ -159,7 +173,7 @@ fn expected_kind(s: &'static str) -> BTreeSet<TokenFormat> {
     [TokenFormat::Kind(s)].into_iter().collect()
 }
 
-fn esc_char() -> impl Parser<char, char, Error=Error> {
+fn esc_char<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
     filter_map(|position, c| match c {
         '"'|'\\'|'/' => Ok(c),
         'b' => Ok('\u{0008}'),
@@ -201,7 +215,7 @@ fn esc_char() -> impl Parser<char, char, Error=Error> {
             .recover_with(skip_until(['}', '"', '\\'], |_| '\0'))))
 }
 
-fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
+fn escaped_string<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     just('"')
     .ignore_then(
         filter(|&c| c != '"' && c != '\\')
@@ -214,9 +228,9 @@ fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
             {
                 e.merge(Error::Unclosed {
                     label: "string",
-                    opened_at: Span(span.0-1, span.0), // we know it's `"`
+                    opened_at: before_start(&span, 1),
                     opened: '"'.into(),
-                    expected_at: Span(span.1, span.1),
+                    expected_at: at_end(&span),
                     expected: '"'.into(),
                     found: None.into(),
                 })
@@ -227,7 +241,7 @@ fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
     )
 }
 
-fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
+fn bare_ident<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     let sign = just('+').or(just('-'));
     choice((
         sign.chain(id_sans_dig().chain(id_char().repeated())),
@@ -259,8 +273,7 @@ fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
     })
 }
 
-fn ident() -> impl Parser<char, Box<str>, Error=Error> {
-
+fn ident<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     choice((
         // match -123 so `-` will not be treated as an ident by backtracking
         number().map(Err),
@@ -277,28 +290,29 @@ fn ident() -> impl Parser<char, Box<str>, Error=Error> {
     }))
 }
 
-fn keyword() -> impl Parser<char, Literal, Error=Error> {
+fn keyword<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     choice((
         just("null")
-            .map_err(|e: Error| e.with_expected_token("null"))
+            .map_err(|e: Error<S>| e.with_expected_token("null"))
             .to(Literal::Null),
         just("true")
-            .map_err(|e: Error| e.with_expected_token("true"))
+            .map_err(|e: Error<S>| e.with_expected_token("true"))
             .to(Literal::Bool(true)),
         just("false")
-            .map_err(|e: Error| e.with_expected_token("false"))
+            .map_err(|e: Error<S>| e.with_expected_token("false"))
             .to(Literal::Bool(false)),
     ))
 }
 
-fn digit(radix: u32) -> impl Parser<char, char, Error=Error> {
+fn digit<S: Span>(radix: u32) -> impl Parser<char, char, Error=Error<S>> {
     filter(move |c: &char| c.is_digit(radix))
 }
-fn digits(radix: u32) -> impl Parser<char, Vec<char>, Error=Error> {
+
+fn digits<S: Span>(radix: u32) -> impl Parser<char, Vec<char>, Error=Error<S>> {
     filter(move |c: &char| c == &'_' || c.is_digit(radix)).repeated()
 }
 
-fn decimal_number() -> impl Parser<char, Literal, Error=Error> {
+fn decimal_number<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     just('-').or(just('+')).or_not()
     .chain(digit(10)).chain(digits(10))
     .chain(just('.').chain(digit(10)).chain(digits(10)).or_not().flatten())
@@ -316,7 +330,7 @@ fn decimal_number() -> impl Parser<char, Literal, Error=Error> {
     })
 }
 
-fn radix_number() -> impl Parser<char, Literal, Error=Error> {
+fn radix_number<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     just('-').or(just('+')).or_not()
     .then_ignore(just('0'))
     .then(choice((
@@ -335,11 +349,11 @@ fn radix_number() -> impl Parser<char, Literal, Error=Error> {
     })
 }
 
-fn number() -> impl Parser<char, Literal, Error=Error> {
+fn number<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     radix_number().or(decimal_number())
 }
 
-fn literal() -> impl Parser<char, Literal, Error=Error> {
+fn literal<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     choice((
         string().map(Literal::String),
         keyword(),
@@ -347,27 +361,28 @@ fn literal() -> impl Parser<char, Literal, Error=Error> {
     ))
 }
 
-fn type_name() -> impl Parser<char, TypeName, Error=Error> {
+fn type_name<S: Span>() -> impl Parser<char, TypeName, Error=Error<S>> {
     ident().delimited_by(just('('), just(')')).map(TypeName::from_string)
 }
 
-fn spanned<T, P>(p: P) -> impl Parser<char, Spanned<T, Span>, Error=Error>
-    where P: Parser<char, T, Error=Error>
+fn spanned<T, S, P>(p: P) -> impl Parser<char, Spanned<T, S>, Error=Error<S>>
+    where P: Parser<char, T, Error=Error<S>>,
+          S: Span,
 {
     p.map_with_span(|value, span| Spanned { span, value })
 }
 
-fn esc_line() -> impl Parser<char, (), Error=Error> {
+fn esc_line<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     just('\\')
         .ignore_then(ws().repeated())
         .ignore_then(comment().or(newline()))
 }
 
-fn node_space() -> impl Parser<char, (), Error=Error> {
+fn node_space<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     ws().or(esc_line())
 }
 
-fn node_terminator() -> impl Parser<char, (), Error=Error> {
+fn node_terminator<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     choice((newline(), comment(), just(';').ignored(), end()))
 }
 
@@ -377,17 +392,19 @@ enum PropOrArg<S> {
     Ignore,
 }
 
-fn type_name_value() -> impl Parser<char, Value<Span>, Error=Error> {
+fn type_name_value<S: Span>() -> impl Parser<char, Value<S>, Error=Error<S>> {
     spanned(type_name()).then(spanned(literal()))
     .map(|(type_name, literal)| Value { type_name: Some(type_name), literal })
 }
 
-fn value() -> impl Parser<char, Value<Span>, Error=Error> {
+fn value<S: Span>() -> impl Parser<char, Value<S>, Error=Error<S>> {
     type_name_value()
     .or(spanned(literal()).map(|literal| Value { type_name: None, literal }))
 }
 
-fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+fn prop_or_arg_inner<S: Span>()
+    -> impl Parser<char, PropOrArg<S>, Error=Error<S>>
+{
     use PropOrArg::*;
     choice((
         spanned(literal()).then(just('=').ignore_then(value()).or_not())
@@ -459,7 +476,7 @@ fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     ))
 }
 
-fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+fn prop_or_arg<S: Span>() -> impl Parser<char, PropOrArg<S>, Error=Error<S>> {
     begin_comment('-')
         .ignore_then(node_space().repeated())
         .ignore_then(prop_or_arg_inner())
@@ -467,12 +484,12 @@ fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     .or(prop_or_arg_inner())
 }
 
-fn line_space() -> impl Parser<char, (), Error=Error> {
+fn line_space<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     newline().or(ws()).or(comment())
 }
 
 
-fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
+fn nodes<S: Span>() -> impl Parser<char, Vec<SpannedNode<S>>, Error=Error<S>> {
     use PropOrArg::*;
     recursive(|nodes| {
         let braced_nodes = nodes
@@ -482,9 +499,10 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
                 {
                     e.merge(Error::Unclosed {
                         label: "curly braces",
-                        opened_at: Span(span.0, span.0+1), // we know it's `{`
+                        // we know it's `{` at the start of the span
+                        opened_at: at_start(&span, 1),
                         opened: '{'.into(),
-                        expected_at: Span(span.1, span.1),
+                        expected_at: at_end(&span),
                         expected: '}'.into(),
                         found: None.into(),
                     })
@@ -548,7 +566,9 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
     })
 }
 
-pub(crate) fn document() -> impl Parser<char, Document<Span>, Error=Error> {
+pub(crate) fn document<S: Span>()
+    -> impl Parser<char, Document<S>, Error=Error<S>>
+{
     nodes().then_ignore(end()).map(|nodes| Document { nodes })
 }
 
@@ -575,7 +595,7 @@ mod test {
     }
 
     fn parse<'x, P, T>(p: P, text: &'x str) -> Result<T, String>
-        where P: Parser<char, T, Error=ParseErrorEnum>
+        where P: Parser<char, T, Error=ParseErrorEnum<Span>>
     {
         p.then_ignore(end())
         .parse(Stream::from_iter(
@@ -587,7 +607,7 @@ mod test {
             let e = ParseError {
                 errors: errors.into_iter().map(|error| {
                     AddSource {
-                        source: source.clone(),
+                        source_code: source.clone(),
                         error,
                     }
                 }).collect(),

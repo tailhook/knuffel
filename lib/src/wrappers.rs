@@ -18,12 +18,12 @@ pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
         let e = ParseError {
             errors: errors.into_iter().map(|error| {
                 AddSource {
-                    source: source.clone(),
+                    source_code: source.clone(),
                     error,
                 }
             }).collect(),
         };
-        RealError::Parse(e)
+        RealError::Parse(Box::new(e))
     })
 }
 

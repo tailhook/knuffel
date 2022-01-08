@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::ast::{SpannedNode, Literal, Value, TypeName};
 use crate::span::Spanned;
 use crate::errors::Error;
@@ -15,7 +17,7 @@ pub trait DecodePartial<S>: Sized {
     fn insert_child(&mut self, node: &SpannedNode<S>) -> Result<bool, Error<S>>;
     fn insert_property(&mut self, name: &Spanned<Box<str>, S>, value: &Value<S>)
         -> Result<bool, Error<S>>;
-} 
+}
 
 pub trait DecodeScalar<S>: Sized {
     fn type_check(type_name: &Option<Spanned<TypeName, S>>)
@@ -27,5 +29,10 @@ pub trait DecodeScalar<S>: Sized {
     }
 }
 
-pub trait Span: Clone {
+pub trait Span: Into<miette::SourceSpan> + chumsky::Span<Offset=usize>
+                + fmt::Debug + Clone + 'static
+{
+    fn length(&self) -> usize {
+        self.end() - self.start()
+    }
 }

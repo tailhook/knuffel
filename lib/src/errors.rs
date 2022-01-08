@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use thiserror::Error;
 use miette::Diagnostic;
 
-use crate::span::Span;
+use crate::traits::Span;
 
 pub(crate) trait ResultExt<T, S: Clone> {
     fn err_span(self, s: &S) -> Result<T, Error<S>>;
@@ -16,17 +16,17 @@ pub(crate) trait ResultExt<T, S: Clone> {
 #[diagnostic(forward(error))]
 pub(crate) struct AddSource<E: Diagnostic + 'static> {
     #[source_code]
-    pub source: std::sync::Arc<String>,
-    #[source]
+    pub source_code: std::sync::Arc<String>,
     pub error: E,
 }
 
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
 pub enum RealError {
-    #[error(transparent)]
+    //#[error(transparent)]
+    #[error("error parsing KDL text")]
     #[diagnostic(transparent)]
-    Parse(ParseError),
+    Parse(Box<dyn Diagnostic + Send + Sync + 'static>),
     /*
     #[error(transparent)]
     TypeName(Box<dyn Diagnostic + Send + Sync + 'static>),
@@ -42,9 +42,9 @@ pub enum RealError {
 #[derive(Debug, Diagnostic, Error)]
 #[error("error parsing KDL text")]
 #[diagnostic()]
-pub struct ParseError {
+pub struct ParseError<S: Span> {
     #[related]
-    pub(crate) errors: Vec<AddSource<ParseErrorEnum>>,
+    pub(crate) errors: Vec<AddSource<ParseErrorEnum<S>>>,
 }
 
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
@@ -60,13 +60,13 @@ pub(crate) enum TokenFormat {
 struct FormatUnexpected<'x>(&'x TokenFormat, &'x BTreeSet<TokenFormat>);
 
 #[derive(Debug, Diagnostic, Error)]
-pub(crate) enum ParseErrorEnum {
+pub(crate) enum ParseErrorEnum<S: Span> {
     #[error("{}", FormatUnexpected(found, expected))]
     #[diagnostic()]
     Unexpected {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: Span,
+        position: S,
         found: TokenFormat,
         expected: BTreeSet<TokenFormat>,
     },
@@ -75,10 +75,10 @@ pub(crate) enum ParseErrorEnum {
     Unclosed {
         label: &'static str,
         #[label="opened here"]
-        opened_at: Span,
+        opened_at: S,
         opened: TokenFormat,
         #[label("expected {}", expected)]
-        expected_at: Span,
+        expected_at: S,
         expected: TokenFormat,
         found: TokenFormat,
     },
@@ -87,7 +87,7 @@ pub(crate) enum ParseErrorEnum {
     Message {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: Span,
+        position: S,
         message: String,
     },
     #[error("{}", message)]
@@ -95,7 +95,7 @@ pub(crate) enum ParseErrorEnum {
     MessageWithHelp {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: Span,
+        position: S,
         message: String,
         help: &'static str,
     },
@@ -180,8 +180,8 @@ impl fmt::Display for FormatUnexpected<'_> {
     }
 }
 
-impl ParseErrorEnum {
-    pub(crate) fn span(&self) -> &Span {
+impl<S: Span> ParseErrorEnum<S> {
+    pub(crate) fn span(&self) -> &S {
         use ParseErrorEnum::*;
         match self {
             Unexpected { position, .. } => position,
@@ -222,8 +222,8 @@ impl ParseErrorEnum {
     }
 }
 
-impl chumsky::Error<char> for ParseErrorEnum {
-    type Span = Span;
+impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
+    type Span = S;
     type Label = &'static str;
     fn expected_input_found<Iter>(span: Self::Span, expected: Iter,
         found: Option<char>)
@@ -232,7 +232,7 @@ impl chumsky::Error<char> for ParseErrorEnum {
     {
         ParseErrorEnum::Unexpected {
             label: None,
-            position: span.into(),
+            position: span,
             found: found.into(),
             expected: expected.into_iter().map(Into::into).collect(),
         }
@@ -256,7 +256,7 @@ impl chumsky::Error<char> for ParseErrorEnum {
              Unexpected { position, expected, .. })
             => {
                 dest.extend(expected.into_iter());
-                assert!(self.span() == &position);
+                assert_eq!(self.span().start(), position.start());
                 self
             }
             (_, other) => todo!("{} -> {}", self, other),
@@ -271,9 +271,9 @@ impl chumsky::Error<char> for ParseErrorEnum {
     ) -> Self {
         ParseErrorEnum::Unclosed {
             label: "delimited",
-            opened_at: unclosed_span.into(),
+            opened_at: unclosed_span,
             opened: unclosed.into(),
-            expected_at: span.into(),
+            expected_at: span,
             expected: expected.into(),
             found: found.into(),
         }
