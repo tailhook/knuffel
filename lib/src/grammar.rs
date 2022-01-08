@@ -1,58 +1,45 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeSet, BTreeMap};
 
-use combine::error::StreamError;
-use combine::parser::combinator::{recognize, no_partial};
-use combine::parser::char::{digit, oct_digit, hex_digit};
-use combine::parser::repeat::{repeat_skip_until, repeat_until, skip_until};
-use combine::stream::state;
-use combine::stream::{PointerOffset, StreamErrorFor};
-use combine::{Stream, Parser};
-use combine::{eof, optional, between, any, choice};
-use combine::{opaque, attempt, count_min_max, not_followed_by};
-use combine::{many, skip_many1, skip_many, satisfy, satisfy_map, parser};
+use chumsky::prelude::*;
 
 use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
-use crate::ast::{SpannedName, SpannedChildren, Document};
-use crate::span::{Spanned, SpanContext};
+use crate::ast::{SpannedName, SpannedNode, Document};
+use crate::span::{Span, Spanned};
+use crate::errors::{ParseErrorEnum as Error, TokenFormat};
 
 
-struct SpanParser<P>(P);
-
-pub struct SpanState<'a, S: SpanContext<usize>> {
-    pub(crate) span_context: S,
-    pub(crate) data: &'a str,
+fn begin_comment(which: char) -> impl Parser<char, (), Error=Error> + Clone {
+    just('/')
+    .map_err(|e: Error| e.with_no_expected())
+    .ignore_then(just(which).ignored())
 }
 
-pub(crate) trait SpanStream: Stream {
-    type Span;
-    fn span_from(&self, start: Self::Position) -> Self::Span;
+fn newline() -> impl Parser<char, (), Error=Error> {
+    just('\r')
+        .or_not()
+        .ignore_then(just('\n'))
+        .or(just('\r')) // Carriage return
+        .or(just('\x0C')) // Form feed
+        .or(just('\u{0085}')) // Next line
+        .or(just('\u{2028}')) // Line separator
+        .or(just('\u{2029}')) // Paragraph separator
+        .ignored()
+    .map_err(|e: Error| e.with_expected_kind("newline"))
 }
 
-enum PropOrArg<S> {
-    Prop(SpannedName<S>, Value<S>),
-    Arg(Value<S>),
-    Ignore,
-    IgnoreChildren,
-}
-
-fn token<I: Stream<Token=char>>(val: char) -> impl Parser<I, Output=()> {
-    combine::token(val).map(|_| ())
-}
-
-fn ws_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    satisfy(|c| matches!(c,
+fn ws_char() -> impl Parser<char, (), Error=Error> {
+    filter(|c| matches!(c,
         '\t' | ' ' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200A}' |
         '\u{202F}' | '\u{205F}' | '\u{3000}' |
         '\u{FEFF}'
     ))
-    .map(|_| ())
+    .ignored()
 }
 
-fn id_sans_sign_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
-    satisfy(|c| !matches!(c,
-        '-'| '+' | '0'..='9' |
-        '\u{0000}'..='\u{0020}' |
+fn id_char() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
+        '\u{0000}'..='\u{0021}' |
         '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
         // whitespace, excluding 0x20
         '\u{00a0}' | '\u{1680}' |
@@ -61,10 +48,11 @@ fn id_sans_sign_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
-fn id_sans_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
-    satisfy(|c| !matches!(c,
+fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
         '0'..='9' |
         '\u{0000}'..='\u{0020}' |
         '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
@@ -75,11 +63,13 @@ fn id_sans_dig<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
-fn id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
-    satisfy(|c| !matches!(c,
-        '\u{0000}'..='\u{0021}' |
+fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
+    filter(|c| !matches!(c,
+        '-'| '+' | '0'..='9' |
+        '\u{0000}'..='\u{0020}' |
         '\\'|'/'|'('|')'|'{'|'}'|'<'|'>'|';'|'['|']'|'='|','|'"' |
         // whitespace, excluding 0x20
         '\u{00a0}' | '\u{1680}' |
@@ -88,282 +78,268 @@ fn id_char<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
-fn newline<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    token('\r').skip(optional(token('\n')))
-    .or(satisfy(|c| matches!(c,
-        '\n' | '\u{0085}' | '\u{000C}' | '\u{2028}' | '\u{2029}'))
-        .map(|_| ()))
-    .silent().expected("newline")
+fn ws() -> impl Parser<char, (), Error=Error> {
+    ws_char().repeated().at_least(1).ignored().or(ml_comment())
+    .map_err(|e| e.with_expected_kind("whitespace"))
 }
 
-fn not_nl_char<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    satisfy(|c| !matches!(c,
-        '\r' | '\n' | '\u{0085}' | '\u{000C}' | '\u{2028}' | '\u{2029}'))
-    .map(|_| ())
+fn comment() -> impl Parser<char, (), Error=Error> {
+    begin_comment('/')
+    .then(take_until(newline().or(end()))).ignored()
 }
 
-fn comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    (attempt((token('/'), token('/'))),
-        skip_many(not_nl_char()), newline().or(eof()))
-    .silent()
-    .map(|_| ())
-}
-
-fn ml_comment<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    (
-        attempt((token('/'), token('*')).silent()),
-        opaque!(no_partial(
-            repeat_skip_until(
-                ml_comment().or(any().map(|_| ())),
-                attempt((token('*'), token('/'))).map(|_| ()).or(eof()),
-            )
-        )),
-        (token('*'), token('/')).expected("*/").message("unclosed comment"),
-    ).map(|_| ())
-}
-
-fn ws<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    skip_many1(ws_char().silent()).or(ml_comment())
-}
-
-fn esc_value<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
-    struct UniEscape(u32);
-    impl std::default::Default for UniEscape {
-        fn default() -> UniEscape { UniEscape(0) }
-    }
-    impl Extend<u32> for UniEscape {
-        fn extend<T: IntoIterator<Item=u32>>(&mut self, iter: T) {
-            for item in iter {
-                self.0 = (self.0 << 4) | item;
-            }
-        }
-    }
-
-    satisfy_map(|c| match c {
-        '"'|'\\'|'/' => Some(c),
-        'b' => Some('\u{0008}'),
-        'f' => Some('\u{000C}'),
-        'n' => Some('\n'),
-        'r' => Some('\r'),
-        't' => Some('\t'),
-        _ => None,
-    }).message("invalid escape char")
-    .or(token('u').and(token('{')).with(
-        count_min_max(1, 6, satisfy_map(|x: char| x.to_digit(16))))
-        .skip(
-            token('}').message("unicode escape should contain \
-                               1 to 6 hexadecimal chars"))
-        .and_then(|code: UniEscape| {
-            code.0.try_into().map_err(|_| {
-                StreamErrorFor::<I>::message_static_message(
-                    "unicode escape out of range")
+fn ml_comment() -> impl Parser<char, (), Error=Error> {
+    recursive::<_, _, _, _, Error>(|comment| {
+        choice((
+            comment,
+            none_of('*').ignored(),
+            just('*').then_ignore(none_of('/').rewind()).ignored(),
+        )).repeated().ignored()
+        .delimited_by(begin_comment('*'), just("*/"))
+    })
+    .map_err_with_span(|e, span| {
+        if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. }) &&
+           span.length() > 2
+        {
+            assert!(span.1 - span.0 >= 2);
+            e.merge(Error::Unclosed {
+                label: "comment",
+                opened_at: Span(span.0, span.0+2), // we know it's `/ *`
+                opened: "/*".into(),
+                expected_at: Span(span.1, span.1),
+                expected: "*/".into(),
+                found: None.into(),
             })
-        }))
+        } else {
+            // otherwise opening /* is not matched
+            e
+        }
+    })
 }
 
-fn escaped_string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
-    between(token('"'), token('"').message("unclosed quoted string"), many(
-        satisfy(|c| c != '"' && c != '\\')
-        .or(token('\\').with(esc_value()))
-        .silent()  // expose only unexpected '"'
-    ))
-    .map(|val: String| val.into())
-}
-
-fn raw_string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
-    choice((
-        between(attempt((token('r'), token('"'))).silent(),
-                token('"').message("unclosed raw string"),
-                many(satisfy(|c| c != '"'))),
-        attempt((token('r'), token('#'))).silent()
-            .with(parser(|input| {
-                let mut iter = token('#').iter(input);
-                let cnt = (&mut iter).count();
-                iter.into_result(cnt + 1)
-            })).skip(token('"'))
-            .then(|n| {
-                let mut quote = String::with_capacity(n+1);
-                quote.push('"');
-                for _ in 0..n {
-                    quote.push('#');
+fn raw_string() -> impl Parser<char, Box<str>, Error=Error> {
+    just('r')
+        .ignore_then(just('#').repeated().map(|v| v.len()))
+        .then_ignore(just('"'))
+        .then_with(|sharp_num|
+            take_until(
+                just('"')
+                .ignore_then(just('#').repeated().exactly(sharp_num)
+                             .ignored()))
+            .map_err_with_span(move |e, span| {
+                if matches!(&e, Error::Unexpected {
+                    found: TokenFormat::Eoi, .. })
+                {
+                    e.merge(Error::Unclosed {
+                        label: "raw string",
+                        opened_at: Span(span.0 - sharp_num - 2, span.0),
+                        opened: TokenFormat::OpenRaw(sharp_num),
+                        expected_at: Span(span.1, span.1),
+                        expected: TokenFormat::CloseRaw(sharp_num),
+                        found: None.into(),
+                    })
+                } else {
+                    e
                 }
-                let until = token('"')
-                    .with(count_min_max::<(), _, _>(n, n, token('#')))
-                    .or(eof());
-                let end = token('"')
-                    .with(count_min_max::<(), _, _>(n, n, token('#')))
-                    .silent()
-                    .expected(combine::error::Info::Format(quote))
-                    .message("unclosed raw string");
-                recognize(skip_until(attempt(until))).skip(end)
-            }),
-    )).map(|val: String| val.into())
+            })
+        )
+    .map(|(text, ())| {
+        text.into_iter().collect::<String>().into()
+    })
 }
 
-fn string<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
+fn string() -> impl Parser<char, Box<str>, Error=Error> {
     raw_string().or(escaped_string())
 }
 
-fn num_seq<I: Stream<Token=char>, P>(sign: Option<char>, digit: fn() -> P)
-    -> impl Parser<I, Output=String>
-    where P: Parser<I, Output=char>
-{
-    digit().then(move |first| {
-        parser(move |input| {
-            let mut s = String::new();
-            sign.map(|c| s.push(c));
-            s.push(first);
-            let parser = digit().map(Some) .or(token('_').map(|_| None));
-            let mut iter = parser.iter(input);
-            s.extend((&mut iter).flatten());
-            iter.into_result(s)
+fn expected_kind(s: &'static str) -> BTreeSet<TokenFormat> {
+    [TokenFormat::Kind(s)].into_iter().collect()
+}
+
+fn esc_char() -> impl Parser<char, char, Error=Error> {
+    filter_map(|position, c| match c {
+        '"'|'\\'|'/' => Ok(c),
+        'b' => Ok('\u{0008}'),
+        'f' => Ok('\u{000C}'),
+        'n' => Ok('\n'),
+        'r' => Ok('\r'),
+        't' => Ok('\t'),
+        c => Err(Error::Unexpected {
+            label: Some("invalid escape char"),
+            position,
+            found: c.into(),
+            expected: "\"\\/bfnrt".chars().map(|c| c.into()).collect(),
         })
     })
+    .or(just('u').ignore_then(
+            filter_map(|position, c: char| c.is_digit(16).then(|| c)
+                .ok_or_else(|| Error::Unexpected {
+                    label: Some("unexpected character"),
+                    position,
+                    found: c.into(),
+                    expected: expected_kind("hexadecimal digit"),
+                }))
+            .repeated()
+            .at_least(1)
+            .at_most(6)
+            .delimited_by(just('{'), just('}'))
+            .try_map(|hex_chars, position| {
+                let s = hex_chars.into_iter().collect::<String>();
+                let c =
+                    u32::from_str_radix(&s, 16).map_err(|e| e.to_string())
+                    .and_then(|n| char::try_from(n).map_err(|e| e.to_string()))
+                    .map_err(|e| Error::Message {
+                        label: Some("invalid character code"),
+                        position,
+                        message: e.to_string(),
+                    })?;
+                Ok(c)
+            })
+            .recover_with(skip_until(['}', '"', '\\'], |_| '\0'))))
 }
 
-fn opt_sign<I: Stream<Token=char>>() -> impl Parser<I, Output=Option<char>> {
-    optional(choice((
-        combine::token('+'),
-        combine::token('-'),
-    )))
+fn escaped_string() -> impl Parser<char, Box<str>, Error=Error> {
+    just('"')
+    .ignore_then(
+        filter(|&c| c != '"' && c != '\\')
+        .or(just('\\').ignore_then(esc_char()))
+        .repeated()
+        .then_ignore(just('"'))
+        .map(|val| val.into_iter().collect::<String>().into())
+        .map_err_with_span(|e, span| {
+            if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
+            {
+                e.merge(Error::Unclosed {
+                    label: "string",
+                    opened_at: Span(span.0-1, span.0), // we know it's `"`
+                    opened: '"'.into(),
+                    expected_at: Span(span.1, span.1),
+                    expected: '"'.into(),
+                    found: None.into(),
+                })
+            } else {
+                e
+            }
+        })
+    )
 }
 
-fn bin_digit<I: Stream<Token=char>>() -> impl Parser<I, Output=char> {
-    combine::token('0').or(combine::token('1'))
-}
-
-
-fn radix_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
+    let sign = just('+').or(just('-'));
     choice((
-        attempt(opt_sign().skip(token('0')).skip(token('b')))
-            .then(|sign| num_seq(sign, bin_digit))
-            .map(|s| Integer(Radix::Bin, s.into())),
-        attempt(opt_sign().skip(token('0')).skip(token('o')))
-            .then(|sign| num_seq(sign, oct_digit))
-            .map(|s| Integer(Radix::Oct, s.into())),
-        attempt(opt_sign().skip(token('0')).skip(token('x')))
-            .then(|sign| num_seq(sign, hex_digit))
-            .map(|s| Integer(Radix::Hex, s.into())),
-    )).map(|val| Literal::Int(val))
-}
-
-fn number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
-    choice((
-        radix_number(),
-        decimal_number(),
+        sign.chain(id_sans_dig().chain(id_char().repeated())),
+        sign.repeated().exactly(1),
+        id_sans_sign_dig().chain(id_char().repeated())
     ))
-}
-
-fn decimal_number<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
-    (
-        // TODO(tailhook) may attempt() only first digit
-        attempt(opt_sign().then(|sign| num_seq(sign, digit))),
-        optional(token('.').with(num_seq(None, digit))),
-        optional(token('e').or(token('E'))
-            .with(opt_sign().then(|sign| num_seq(sign, digit)))),
-    ).map(|(mut int, opt_dec, opt_exp)| {
-        if opt_dec.is_some() || opt_exp.is_some() {
-            if let Some(dec) = opt_dec {
-                int.push('.');
-                int.push_str(&dec);
-            }
-            if let Some(val) = opt_exp {
-                int.push('e');
-                int.push_str(&val);
-            }
-            Literal::Decimal(Decimal(int.into()))
-        } else {
-            Literal::Int(Integer(Radix::Dec, int.into()))
+    .map(|v| v.into_iter().collect()).try_map(|s: String, position| {
+        match &s[..] {
+            "true" => Err(Error::Unexpected {
+                label: Some("keyword"),
+                position,
+                found: TokenFormat::Token("true"),
+                expected: expected_kind("identifier"),
+            }),
+            "false" => Err(Error::Unexpected {
+                label: Some("keyword"),
+                position,
+                found: TokenFormat::Token("false"),
+                expected: expected_kind("identifier"),
+            }),
+            "null" => Err(Error::Unexpected {
+                label: Some("keyword"),
+                position,
+                found: TokenFormat::Token("null"),
+                expected: expected_kind("identifier"),
+            }),
+            _ => Ok(s.into()),
         }
     })
 }
 
+fn ident() -> impl Parser<char, Box<str>, Error=Error> {
 
-fn bare_ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
-    let sign = token('+').or(token('-'));
-    attempt(recognize(choice((
-        (sign, optional((id_sans_dig(), skip_many(id_char())))).map(|_| ()),
-        (id_sans_sign_dig(), skip_many(id_char())).map(|_| ()),
-    )).skip(not_followed_by(digit()))).and_then(|s: String| {
-        match &s[..] {
-            "true" => Err(StreamErrorFor::<I>::unexpected("true")),
-            "false" => Err(StreamErrorFor::<I>::unexpected("false")),
-            "null" => Err(StreamErrorFor::<I>::unexpected("null")),
-            _ => Ok(s.into()),
-        }
-    }).silent().expected("identifier"))
+    choice((
+        // match -123 so `-` will not be treated as an ident by backtracking
+        number().map(Err),
+        bare_ident().map(Ok),
+        string().map(Ok),
+    ))
+    // when backtracking is not already possible,
+    // throw error for numbers (mapped to `Result::Err`)
+    .try_map(|res, span| res.map_err(|_| Error::Unexpected {
+        label: Some("unexpected number"),
+        position: span,
+        found: TokenFormat::Kind("number"),
+        expected: expected_kind("identifier"),
+    }))
 }
 
-fn ident<I: Stream<Token=char>>() -> impl Parser<I, Output=Box<str>> {
-    choice((bare_ident(), string()))
-}
-
-fn type_name<I: Stream<Token=char>>() -> impl Parser<I, Output=TypeName> {
-    token('(').with(ident()).skip(token(')')).map(TypeName::from_string)
-}
-
-fn esc_line<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    (token('\\'), skip_many(ws()), comment().or(newline())).map(|_| ())
-}
-
-fn line_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    newline().or(ws()).or(comment()).silent()
-}
-
-fn node_space<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    ws().or(esc_line()).map(|_| ()).silent()
-}
-
-fn nodes<I>() -> impl Parser<I, Output=Vec<Spanned<Node<I::Span>, I::Span>>>
-    where I: SpanStream<Token=char>,
-{
-    skip_many(line_space())
-    .with(repeat_until(
-        (
-            optional(attempt((token('/'), token('-')))
-                     .skip(skip_many(node_space()))),
-            opaque!(no_partial(
-                SpanParser(node()))).skip(skip_many(line_space()))
-        ).map(|(opt, node)| {
-            if opt.is_some() {
-                None // commented out node
-            } else {
-                Some(node)
-            }
-        }),
-        token('}').or(eof())))
-    .map(|v: Vec<_>| v.into_iter().flatten().collect())
-}
-
-
-fn children<I>() -> impl Parser<I, Output=SpannedChildren<I::Span>>
-    where I: SpanStream<Token=char>,
-{
-    SpanParser(between(
-        token('{'),
-        token('}').message("unclosed block"),
-        nodes(),
+fn keyword() -> impl Parser<char, Literal, Error=Error> {
+    choice((
+        just("null")
+            .map_err(|e: Error| e.with_expected_token("null"))
+            .to(Literal::Null),
+        just("true")
+            .map_err(|e: Error| e.with_expected_token("true"))
+            .to(Literal::Bool(true)),
+        just("false")
+            .map_err(|e: Error| e.with_expected_token("false"))
+            .to(Literal::Bool(false)),
     ))
 }
 
-pub(crate) fn document<I>() -> impl Parser<I, Output=Document<I::Span>>
-    where I: SpanStream<Token=char>,
-{
-    nodes().skip(eof()).map(|nodes| Document { nodes })
+fn digit(radix: u32) -> impl Parser<char, char, Error=Error> {
+    filter(move |c: &char| c.is_digit(radix))
+}
+fn digits(radix: u32) -> impl Parser<char, Vec<char>, Error=Error> {
+    filter(move |c: &char| c == &'_' || c.is_digit(radix)).repeated()
 }
 
-fn keyword<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
-    use combine::parser::char::string as keyword;
-    attempt(choice((
-        keyword("null").map(|_| Literal::Null),
-        keyword("true").map(|_| Literal::Bool(true)),
-        keyword("false").map(|_| Literal::Bool(false)),
+fn decimal_number() -> impl Parser<char, Literal, Error=Error> {
+    just('-').or(just('+')).or_not()
+    .chain(digit(10)).chain(digits(10))
+    .chain(just('.').chain(digit(10)).chain(digits(10)).or_not().flatten())
+    .chain(just('e').or(just('E'))
+           .chain(just('-').or(just('+')).or_not())
+           .chain(digits(10)).or_not().flatten())
+    .map(|v| {
+        let is_decimal = v.iter().any(|c| matches!(c, '.'|'e'|'E'));
+        let s: String = v.into_iter().filter(|c| c != &'_').collect();
+        if is_decimal {
+            Literal::Decimal(Decimal(s.into()))
+        } else {
+            Literal::Int(Integer(Radix::Dec, s.into()))
+        }
+    })
+}
+
+fn radix_number() -> impl Parser<char, Literal, Error=Error> {
+    just('-').or(just('+')).or_not()
+    .then_ignore(just('0'))
+    .then(choice((
+        just('b').ignore_then(
+            digit(2).chain(digits(2)).map(|s| (Radix::Bin, s))),
+        just('o').ignore_then(
+            digit(8).chain(digits(8)).map(|s| (Radix::Oct, s))),
+        just('x').ignore_then(
+            digit(16).chain(digits(16)).map(|s| (Radix::Hex, s))),
     )))
+    .map(|(sign, (radix, value))| {
+        let mut s = String::with_capacity(value.len() + sign.map_or(0, |_| 1));
+        sign.map(|c| s.push(c));
+        s.extend(value.into_iter().filter(|&c| c != '_'));
+        Literal::Int(Integer(radix, s.into()))
+    })
 }
 
-fn literal<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
+fn number() -> impl Parser<char, Literal, Error=Error> {
+    radix_number().or(decimal_number())
+}
+
+fn literal() -> impl Parser<char, Literal, Error=Error> {
     choice((
         string().map(Literal::String),
         keyword(),
@@ -371,187 +347,260 @@ fn literal<I: Stream<Token=char>>() -> impl Parser<I, Output=Literal> {
     ))
 }
 
-/// Untyped value without a string option, that is used to provide better
-/// errors when value=something is written
-fn arg_value<I>() -> impl Parser<I, Output=Value<I::Span>>
-    where I: SpanStream<Token=char>,
-{
-    SpanParser(choice((
-        keyword(),
-        number(),
-    ))).map(|literal| Value { type_name: None, literal })
+fn type_name() -> impl Parser<char, TypeName, Error=Error> {
+    ident().delimited_by(just('('), just(')')).map(TypeName::from_string)
 }
 
-fn value<I>() -> impl Parser<I, Output=Value<I::Span>>
-    where I: SpanStream<Token=char>,
+fn spanned<T, P>(p: P) -> impl Parser<char, Spanned<T, Span>, Error=Error>
+    where P: Parser<char, T, Error=Error>
 {
-    combine::struct_parser!(
-        Value {
-            type_name: optional(SpanParser(type_name())),
-            literal: SpanParser(literal()),
-        }
-    )
+    p.map_with_span(|value, span| Spanned { span, value })
 }
 
-fn prop_or_arg<I>() -> impl Parser<I, Output=PropOrArg<I::Span>>
-    where I: SpanStream<Token=char>,
-{
+fn esc_line() -> impl Parser<char, (), Error=Error> {
+    just('\\')
+        .ignore_then(ws().repeated())
+        .ignore_then(comment().or(newline()))
+}
+
+fn node_space() -> impl Parser<char, (), Error=Error> {
+    ws().or(esc_line())
+}
+
+fn node_terminator() -> impl Parser<char, (), Error=Error> {
+    choice((newline(), comment(), just(';').ignored(), end()))
+}
+
+enum PropOrArg<S> {
+    Prop(SpannedName<S>, Value<S>),
+    Arg(Value<S>),
+    Ignore,
+}
+
+fn type_name_value() -> impl Parser<char, Value<Span>, Error=Error> {
+    spanned(type_name()).then(spanned(literal()))
+    .map(|(type_name, literal)| Value { type_name: Some(type_name), literal })
+}
+
+fn value() -> impl Parser<char, Value<Span>, Error=Error> {
+    type_name_value()
+    .or(spanned(literal()).map(|literal| Value { type_name: None, literal }))
+}
+
+fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     use PropOrArg::*;
-
     choice((
-        SpanParser(bare_ident())
-            .skip(token('=').message("bare identifiers cannot be used \
-                as arguments; use double-quotes, \
-                one of `true`, `false`, `null` or ensure it's a property by \
-                adding `=` and value."))
-            .and(value())
-            .map(|(name, value)| Prop(name, value)),
-        SpanParser(string()).and(optional(token('=').with(value())))
-            .map(|(name, opt_value)| {
-                if let Some(value) = opt_value {
+        spanned(literal()).then(just('=').ignore_then(value()).or_not())
+            .try_map(|(name, value), _| {
+                let name_span = name.span;
+                match (name.value, value) {
+                    (Literal::String(s), Some(value)) => {
+                        let name = Spanned {
+                            span: name_span,
+                            value: s,
+                        };
+                        Ok(Prop(name, value))
+                    }
+                    (Literal::Bool(_) | Literal::Null, Some(_)) => {
+                        Err(Error::Unexpected {
+                            label: Some("unexpected keyword"),
+                            position: name_span,
+                            found: TokenFormat::Kind("keyword"),
+                            expected: [
+                                TokenFormat::Kind("identifier"),
+                                TokenFormat::Kind("string"),
+                            ].into_iter().collect(),
+                        })
+                    }
+                    (Literal::Int(_) | Literal::Decimal(_), Some(_)) => {
+                        Err(Error::MessageWithHelp {
+                            label: Some("unexpected number"),
+                            position: name_span,
+                            message: "numbers cannot be used as property names"
+                                .into(),
+                            help: "consider enclosing in double quotes \"..\"",
+                        })
+                    }
+                    (value, None) => Ok(Arg(Value {
+                        type_name: None,
+                        literal: Spanned {
+                            span: name_span,
+                            value,
+                        },
+                    })),
+                }
+            }),
+        spanned(bare_ident()).then(just('=').ignore_then(value()).or_not())
+            .validate(|(name, value), span, emit| {
+                if value.is_none() {
+                    emit(Error::MessageWithHelp {
+                        label: Some("unexpected identifier"),
+                        position: span,
+                        message: "identifiers cannot be used as arguments"
+                            .into(),
+                        help: "consider enclosing in double quotes \"..\"",
+                    });
+                }
+                (name, value)
+            })
+            .map(|(name, value)| {
+                if let Some(value) = value {
                     Prop(name, value)
                 } else {
+                    // this is invalid, but we already emitted error
+                    // in validate() above, so doing a sane fallback
                     Arg(Value {
                         type_name: None,
                         literal: name.map(Literal::String),
                     })
                 }
             }),
-        arg_value().map(Arg).skip(optional(
-            token('=').and_then(|_| -> Result<(), StreamErrorFor<I>> {
-                Err(StreamErrorFor::<I>::message_static_message(
-                    "numbers and keywords cannot be used as property names, \
-                    consider using double quotes"
-                ))
-            })
-        )),
-        value().map(Arg),
+        type_name_value().map(Arg),
     ))
 }
 
-fn node_terminator<I: Stream<Token=char>>() -> impl Parser<I, Output=()> {
-    choice((newline(), comment(), token(';'), eof()))
+fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+    begin_comment('-')
+        .ignore_then(node_space().repeated())
+        .ignore_then(prop_or_arg_inner())
+        .map(|_| PropOrArg::Ignore)
+    .or(prop_or_arg_inner())
 }
 
-fn node<I>() -> impl Parser<I, Output=Node<I::Span>>
-    where I: SpanStream<Token=char>,
-{
-    keyword().and_then(|_| Err(StreamErrorFor::<I>::message_static_message(
-        "keyword cannot be used as a node name, \
-         use double quotes or prepend the value with a node name"))
-    ).or(
-        combine::struct_parser!(
-            Node {
-                type_name: optional(SpanParser(type_name())),
-                node_name: SpanParser(ident()),
-                properties: combine::produce(BTreeMap::new),
-                arguments: combine::produce(Vec::new),
-                children: combine::produce(|| None),
-            }
-        )
-    ).and(
-        repeat_until(
-            node_space().with(optional(choice((
-                attempt((token('/'), token('-')))
-                    .and(skip_many(node_space()))
-                    .with(optional(prop_or_arg())).map(|opt| {
-                        if opt.is_some() {
-                            PropOrArg::Ignore
-                        } else {
-                            PropOrArg::IgnoreChildren
-                        }
-                    }),
-                prop_or_arg(),
-            ))).map(|x| x.unwrap_or(PropOrArg::Ignore))),
-            token('{').or(node_terminator()),
-        )
-    ).and(
-        optional(children())
-    ).skip(
-        node_terminator()
-    ).map(|((mut node, list), children): ((Node<_>, Vec<_>), _)| {
-        use PropOrArg::*;
+fn line_space() -> impl Parser<char, (), Error=Error> {
+    newline().or(ws()).or(comment())
+}
 
-        if !matches!(list.last(), Some(IgnoreChildren)) {
-            node.children = children;
-        }
-        for item in list {
-            match item {
-                Prop(key, val) => {
-                    node.properties.insert(key, val);
+
+fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
+    use PropOrArg::*;
+    recursive(|nodes| {
+        let braced_nodes = nodes
+            .delimited_by(just('{'), just('}'))
+            .map_err_with_span(|e, span| {
+                if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
+                {
+                    e.merge(Error::Unclosed {
+                        label: "curly braces",
+                        opened_at: Span(span.0, span.0+1), // we know it's `{`
+                        opened: '{'.into(),
+                        expected_at: Span(span.1, span.1),
+                        expected: '}'.into(),
+                        found: None.into(),
+                    })
+                } else {
+                    e
                 }
-                Arg(val) => {
-                    node.arguments.push(val);
+            });
+
+        let node = spanned(type_name()).or_not()
+            .then(spanned(ident()))
+            .then(
+                node_space()
+                .repeated().at_least(1)
+                .ignore_then(prop_or_arg())
+                .repeated()
+            )
+            .then(node_space().repeated()
+                  .ignore_then(begin_comment('-')
+                               .then_ignore(node_space().repeated())
+                               .or_not())
+                  .then(spanned(braced_nodes))
+                  .or_not())
+            .then_ignore(node_terminator())
+            .map(|(((type_name, node_name), line_items), opt_children)| {
+                let mut node = Node {
+                    type_name,
+                    node_name,
+                    properties: BTreeMap::new(),
+                    arguments: Vec::new(),
+                    children: match opt_children {
+                        Some((Some(_comment), _)) => None,
+                        Some((None, children)) => Some(children),
+                        None => None,
+                    },
+                };
+                for item in line_items {
+                    match item {
+                        Prop(name, value) => {
+                            node.properties.insert(name, value);
+                        }
+                        Arg(value) => {
+                            node.arguments.push(value);
+                        }
+                        Ignore => {}
+                    }
                 }
-                Ignore|IgnoreChildren => {}
-            }
-        }
-        node
+                node
+            });
+
+        begin_comment('-').then_ignore(node_space().repeated()).or_not()
+        .then(spanned(node))
+            .separated_by(line_space().repeated())
+            .allow_leading().allow_trailing()
+            .map(|vec| vec.into_iter().filter_map(|(comment, node)| {
+                if comment.is_none() {
+                    Some(node)
+                } else {
+                    None
+                }
+            }).collect())
     })
 }
 
-impl<'a, I, S> SpanStream for state::Stream<I, SpanState<'a, S>>
-    where I: Stream<Position=PointerOffset<str>>,
-          S: SpanContext<usize>,
-{
-    type Span = S::Span;
-    fn span_from(&self, start: Self::Position) -> Self::Span {
-        let start = start.translate_position(self.state.data);
-        let end = self.stream.position().translate_position(self.state.data);
-        return self.state.span_context.from_positions(start, end);
-    }
-}
-
-impl<P: Parser<I>, I: SpanStream> Parser<I> for SpanParser<P> {
-    type Output = Spanned<P::Output, I::Span>;
-    type PartialState = ();
-
-    #[inline]
-    fn parse_lazy(&mut self, input: &mut I)
-        -> combine::ParseResult<Self::Output, I::Error>
-    {
-        let start = input.position();
-        self.0.parse_lazy(input)
-            .map(|value| {
-                let span = input.span_from(start);
-                Spanned { span, value }
-            })
-    }
+pub(crate) fn document() -> impl Parser<char, Document<Span>, Error=Error> {
+    nodes().then_ignore(end()).map(|nodes| Document { nodes })
 }
 
 #[cfg(test)]
 mod test {
+    use chumsky::prelude::*;
+    use chumsky::Stream;
+    use crate::errors::{ParseError, ParseErrorEnum, AddSource};
+    use crate::span::Span;
+    use crate::ast::{Literal, TypeName, Radix, Decimal, Integer};
+    use super::{ws, comment, ml_comment, string, ident, literal, type_name};
+    use super::{nodes, number};
 
-    use combine::eof;
-    use combine::{Parser};
-    use combine::stream::state;
-    use combine::easy::{Stream, Errors};
+    macro_rules! err_eq {
+        ($left: expr, $right: expr) => {
+            let left = $left.unwrap_err();
+            let left: serde_json::Value = serde_json::from_str(&left).unwrap();
+            let right: serde_json::Value =
+                serde_json::from_str($right).unwrap();
+            //assert_json_diff::assert_json_includes!(
+            //    actual: left, expected: right);
+            assert_json_diff::assert_json_eq!(left, right);
+        }
+    }
 
-    use crate::span::{Span, SimpleContext};
-    use crate::ast::{Literal, TypeName, Integer, Radix, Decimal};
-
-    use super::{ws, comment, ml_comment, string, ident, type_name, node};
-    use super::{literal, number, nodes};
-    use super::{SpanParser, SpanState};
-
-
-    fn parse<'x, P>(p: P, text: &'x str)
-        -> Result<P::Output, Errors<char, &str, usize>>
-        where P: Parser<state::Stream<Stream<&'x str>,
-                                      SpanState<'x, SimpleContext>>>
+    fn parse<'x, P, T>(p: P, text: &'x str) -> Result<T, String>
+        where P: Parser<char, T, Error=ParseErrorEnum>
     {
-        p.skip(eof()).parse(state::Stream {
-            stream: Stream(text),
-            state: SpanState {
-                span_context: SimpleContext,
-                data: text,
-            },
+        p.then_ignore(end())
+        .parse(Stream::from_iter(
+                Span(text.len(), text.len()),
+                text.char_indices()
+                    .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
+        )).map_err(|errors| {
+            let source: std::sync::Arc<String> = (text.to_string() + " ").into();
+            let e = ParseError {
+                errors: errors.into_iter().map(|error| {
+                    AddSource {
+                        source: source.clone(),
+                        error,
+                    }
+                }).collect(),
+            };
+            let mut buf = String::with_capacity(512);
+            miette::GraphicalReportHandler::new()
+                .render_report(&mut buf, &e).unwrap();
+            println!("{}", buf);
+            buf.truncate(0);
+            miette::JSONReportHandler::new()
+                .render_report(&mut buf, &e).unwrap();
+            return buf;
         })
-        .map(|(val, input)| {
-            assert_eq!(input.stream.0, "");
-            val
-        })
-        .map_err(|e| e.map_position(|p| p.translate_position(text)))
     }
 
     #[test]
@@ -563,38 +612,120 @@ mod test {
     #[test]
     fn parse_comments() {
         parse(comment(), "//hello").unwrap();
+        parse(comment(), "//hello\n").unwrap();
         parse(ml_comment(), "/*nothing*/").unwrap();
         parse(ml_comment(), "/*nothing**/").unwrap();
         parse(ml_comment(), "/*no*thing*/").unwrap();
         parse(ml_comment(), "/*no/**/thing*/").unwrap();
         parse(ml_comment(), "/*no/*/**/*/thing*/").unwrap();
-        parse((ws(), comment()), "   // hello").unwrap();
-        parse((ws(), comment(), ws(), comment()),
+        parse(ws().then(comment()), "   // hello").unwrap();
+        parse(ws().then(comment()).then(ws()).then(comment()),
               "   // hello\n   //world").unwrap();
     }
 
     #[test]
     fn parse_comment_err() {
-        let err = parse(ws(), r#"/* comment *"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `*/`"));
-        assert!(err.to_string().contains("unclosed comment"));
-
-        let err = parse(ws(), r#"/* comment"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `*/`"));
-        assert!(err.to_string().contains("unclosed comment"));
-
-        let err = parse(ws(), r#"/*/"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `*/`"));
-        assert!(err.to_string().contains("unclosed comment"));
-
-        let err = parse(ws(), r#"xxx"#).unwrap_err();
-        println!("{}", err);
+        err_eq!(parse(ws(), r#"/* comment"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed comment `/*`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `*/`",
+                    "span": {"offset": 10, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* com/*ment *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed comment `/*`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `*/`",
+                    "span": {"offset": 14, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* com/*me*/nt *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed comment `/*`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `*/`",
+                    "span": {"offset": 16, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/* comment *"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed comment `/*`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `*/`",
+                    "span": {"offset": 12, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(ws(), r#"/*/"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed comment `/*`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `*/`",
+                    "span": {"offset": 3, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
         // nothing is expected for comment or whitespace
-        assert!(!err.to_string().contains("Expected"));
-        assert!(err.to_string().contains("Unexpected `x`"));
+        err_eq!(parse(ws(), r#"xxx"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `x`, expected whitespace",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 0, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
     }
 
     #[test]
@@ -611,73 +742,211 @@ mod test {
     fn parse_raw_str() {
         assert_eq!(&*parse(string(), r#"r"hello""#).unwrap(), "hello");
         assert_eq!(&*parse(string(), r##"r#"world"#"##).unwrap(), "world");
-        assert_eq!(&*parse(string(), r####"r###"a\nb"###"####).unwrap(),
-                   "a\\nb");
+        assert_eq!(&*parse(string(), r##"r#"world"#"##).unwrap(), "world");
+        assert_eq!(&*parse(string(), r####"r###"a\n"##b"###"####).unwrap(),
+                   "a\\n\"##b");
     }
 
     #[test]
     fn parse_str_err() {
-        let err = parse(string(), r#""hello"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `\"`"));
-        assert!(err.to_string().contains("unclosed quoted string"));
-
-        let err = parse(string(), r#""he\u{FFFFFF}llo""#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("unicode escape out of range"));
-
-        let err = parse(string(), r#""he\u{1234567}llo""#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("unicode escape"));
-
-        let err = parse(string(), r#""he\u{1gh}llo""#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("hexadecimal"));
-
-        let err = parse(string(), r#""he\x01llo""#).unwrap_err();
-        println!("{}", err);
-        assert_eq!(err.position, 4);
-        assert!(err.to_string().contains("invalid escape char"));
+        err_eq!(parse(string(), r#""hello"#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed string `\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 1}},
+                    {"label": "expected `\"`",
+                    "span": {"offset": 6, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{FFFFFF}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "converted integer out of range for `char`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid character code",
+                    "span": {"offset": 5, "length": 8}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{1234567}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `7`, expected `}`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 12, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\u{1gh}llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found `g`, expected `}` or hexadecimal digit",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected token",
+                    "span": {"offset": 7, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r#""he\x01llo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found `x`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid escape char",
+                    "span": {"offset": 4, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+        // Tests error recovery
+        err_eq!(parse(string(), r#""he\u{FFFFFF}l\!lo""#), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "converted integer out of range for `char`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid character code",
+                    "span": {"offset": 5, "length": 8}}
+                ],
+                "related": []
+            }, {
+                "message":
+                    "found `!`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "invalid escape char",
+                    "span": {"offset": 15, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
     }
-
     #[test]
     fn parse_raw_str_err() {
-        let err = parse(string(), r#"r"hello"#).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `\"`"));
-        assert!(err.to_string().contains("unclosed raw string"));
-
-        let err = parse(string(), r###"r#"hello""###).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `\"#`"));
-        assert!(err.to_string().contains("unclosed raw string"));
-
-        let err = parse(string(), r####"r###"hello"####).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `\"###`"));
-        assert!(err.to_string().contains("unclosed raw string"));
-
-        let err = parse(string(), r####"r###"hello"#"####).unwrap_err();
-        println!("{}", err);
-        assert!(err.to_string().contains("Expected `\"###`"));
-        assert!(err.to_string().contains("unclosed raw string"));
-    }
-
-    #[test]
-    fn parse_spanned() {
-        let val = parse(ws().with(SpanParser(string())), r#"   "hello""#)
-            .unwrap();
-        assert_eq!(*val, "hello".into());
-        assert_eq!(val.span(), &Span(3, 10));
+        err_eq!(parse(string(), r#"r"hello"#),  r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 2}},
+                    {"label": "expected `\"`",
+                    "span": {"offset": 7, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(string(), r###"r#"hello""###), r###"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r#\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 3}},
+                    {"label": "expected `\"#`",
+                    "span": {"offset": 9, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"###);
+        err_eq!(parse(string(), r####"r###"hello"####), r####"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r###\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 5}},
+                    {"label": "expected `\"###`",
+                    "span": {"offset": 10, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"####);
+        err_eq!(parse(string(), r####"r###"hello"#world"####), r####"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed raw string `r###\"`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 0, "length": 5}},
+                    {"label": "expected `\"###`",
+                    "span": {"offset": 17, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"####);
     }
 
     #[test]
     fn parse_ident() {
         assert_eq!(&*parse(ident(), "abcdef").unwrap(), "abcdef");
         assert_eq!(&*parse(ident(), "xx_cd$yy").unwrap(), "xx_cd$yy");
-        assert_eq!(&*parse(ident().skip(ws()), "adef   ").unwrap(), "adef");
-        assert_eq!(&*parse(ident().skip(ws()), "a123@   ").unwrap(), "a123@");
+        assert_eq!(&*parse(ident(), "-").unwrap(), "-");
+        assert_eq!(&*parse(ident(), "--hello").unwrap(), "--hello");
+        assert_eq!(&*parse(ident(), "--hello1234").unwrap(), "--hello1234");
+        assert_eq!(&*parse(ident(), "--1").unwrap(), "--1");
+        assert_eq!(&*parse(ident(), "++1").unwrap(), "++1");
+        assert_eq!(&*parse(ident(), "-hello").unwrap(), "-hello");
+        assert_eq!(&*parse(ident(), "+hello").unwrap(), "+hello");
+        assert_eq!(&*parse(ident(), "-A").unwrap(), "-A");
+        assert_eq!(&*parse(ident(), "+b").unwrap(), "+b");
+        assert_eq!(&*parse(ident().then_ignore(ws()), "adef   ").unwrap(),
+                   "adef");
+        assert_eq!(&*parse(ident().then_ignore(ws()), "a123@   ").unwrap(),
+                   "a123@");
         parse(ident(), "1abc").unwrap_err();
+        parse(ident(), "-1").unwrap_err();
+        parse(ident(), "-1test").unwrap_err();
+        parse(ident(), "+1").unwrap_err();
     }
 
     #[test]
@@ -689,19 +958,58 @@ mod test {
 
     #[test]
     fn exclude_keywords() {
-        parse(node(), "item true").unwrap();
+        parse(nodes(), "item true").unwrap();
 
-        let err = parse(node(), "true \"item\"").unwrap_err();
-        println!("{}", err);
-        println!("{:?}", err);
-        assert!(err.to_string().contains("cannot be used as a node name"));
-        assert!(!err.to_string().contains("Unexpected"));
+        err_eq!(parse(nodes(), "true \"item\""), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found `true`, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "keyword",
+                    "span": {"offset": 0, "length": 4}}
+                ],
+                "related": []
+            }]
+        }"#);
 
-        let err = parse(node(), "item false=true").unwrap_err();
-        println!("{}", err);
-        println!("{:?}", err);
-        assert!(err.to_string().contains("cannot be used as property names"));
-        assert!(!err.to_string().contains("Unexpected"));
+        err_eq!(parse(nodes(), "item false=true"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message":
+                    "found keyword, expected identifier or string",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected keyword",
+                    "span": {"offset": 5, "length": 5}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "item 2=2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "numbers cannot be used as property names",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 5, "length": 1}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }]
+        }"#);
     }
 
     #[test]
@@ -716,25 +1024,66 @@ mod test {
     }
 
     #[test]
+    fn parse_type_err() {
+        err_eq!(parse(type_name(), "(123)"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 1, "length": 3}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(type_name(), "(-1)"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 1, "length": 2}}
+                ],
+                "related": []
+            }]
+        }"#);
+    }
+
+    #[test]
     fn parse_node() {
-        let nval = parse(node(), "hello").unwrap();
+        fn single<T, E: std::fmt::Debug>(r: Result<Vec<T>, E>) -> T {
+            let mut v = r.unwrap();
+            assert_eq!(v.len(), 1);
+            v.remove(0)
+        }
+
+        let nval = single(parse(nodes(), "hello"));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
 
-        let nval = parse(node(), "\"123\"").unwrap();
+        let nval = single(parse(nodes(), "\"123\""));
         assert_eq!(nval.node_name.as_ref(), "123");
         assert_eq!(nval.type_name.as_ref(), None);
 
-        let nval = parse(node(), "(typ)other").unwrap();
+        let nval = single(parse(nodes(), "(typ)other"));
         assert_eq!(nval.node_name.as_ref(), "other");
         assert_eq!(nval.type_name.as_ref().map(|x| &***x), Some("typ"));
 
-        let nval = parse(node(), "(\"std::duration\")\"timeout\"").unwrap();
+        let nval = single(parse(nodes(), "(\"std::duration\")\"timeout\""));
         assert_eq!(nval.node_name.as_ref(), "timeout");
         assert_eq!(nval.type_name.as_ref().map(|x| &***x),
                    Some("std::duration"));
 
-        let nval = parse(node(), "hello \"arg1\"").unwrap();
+        let nval = single(parse(nodes(), "hello \"arg1\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 1);
@@ -742,7 +1091,7 @@ mod test {
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("arg1".into()));
 
-        let nval = parse(node(), "node \"true\"").unwrap();
+        let nval = single(parse(nodes(), "node \"true\""));
         assert_eq!(nval.node_name.as_ref(), "node");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 1);
@@ -750,7 +1099,7 @@ mod test {
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("true".into()));
 
-        let nval = parse(node(), "hello (string)\"arg1\"").unwrap();
+        let nval = single(parse(nodes(), "hello (string)\"arg1\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 1);
@@ -760,7 +1109,7 @@ mod test {
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("arg1".into()));
 
-        let nval = parse(node(), "hello key=(string)\"arg1\"").unwrap();
+        let nval = single(parse(nodes(), "hello key=(string)\"arg1\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 0);
@@ -771,7 +1120,7 @@ mod test {
         assert_eq!(&*nval.properties.get("key").unwrap().literal,
                    &Literal::String("arg1".into()));
 
-        let nval = parse(node(), "hello key=\"arg1\"").unwrap();
+        let nval = single(parse(nodes(), "hello key=\"arg1\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 0);
@@ -779,13 +1128,13 @@ mod test {
         assert_eq!(&*nval.properties.get("key").unwrap().literal,
                    &Literal::String("arg1".into()));
 
-        let nval = parse(node(), "parent {\nchild\n}").unwrap();
+        let nval = single(parse(nodes(), "parent {\nchild\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 1);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
                    "child");
 
-        let nval = parse(node(), "parent {\nchild1\nchild2\n}").unwrap();
+        let nval = single(parse(nodes(), "parent {\nchild1\nchild2\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 2);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
@@ -793,34 +1142,34 @@ mod test {
         assert_eq!(nval.children.as_ref().unwrap()[1].node_name.as_ref(),
                    "child2");
 
-        let nval = parse(node(), "parent{\nchild3\n}").unwrap();
+        let nval = single(parse(nodes(), "parent{\nchild3\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 1);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
                    "child3");
 
-        let nval = parse(node(), "parent \"x\"=1 {\nchild4\n}").unwrap();
+        let nval = single(parse(nodes(), "parent \"x\"=1 {\nchild4\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.properties.len(), 1);
         assert_eq!(nval.children().len(), 1);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
                    "child4");
 
-        let nval = parse(node(), "parent \"x\" {\nchild4\n}").unwrap();
+        let nval = single(parse(nodes(), "parent \"x\" {\nchild4\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.arguments.len(), 1);
         assert_eq!(nval.children().len(), 1);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
                    "child4");
 
-        let nval = parse(node(), "parent \"x\"{\nchild5\n}").unwrap();
+        let nval = single(parse(nodes(), "parent \"x\"{\nchild5\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.arguments.len(), 1);
         assert_eq!(nval.children().len(), 1);
         assert_eq!(nval.children.as_ref().unwrap()[0].node_name.as_ref(),
                    "child5");
 
-        let nval = parse(node(), "hello /-\"skip_arg\" \"arg2\"").unwrap();
+        let nval = single(parse(nodes(), "hello /-\"skip_arg\" \"arg2\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 1);
@@ -828,7 +1177,7 @@ mod test {
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("arg2".into()));
 
-        let nval = parse(node(), "hello /- \"skip_arg\" \"arg2\"").unwrap();
+        let nval = single(parse(nodes(), "hello /- \"skip_arg\" \"arg2\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 1);
@@ -836,7 +1185,7 @@ mod test {
         assert_eq!(&*nval.arguments[0].literal,
                    &Literal::String("arg2".into()));
 
-        let nval = parse(node(), "hello prop1=\"1\" /-prop1=\"2\"").unwrap();
+        let nval = single(parse(nodes(), "hello prop1=\"1\" /-prop1=\"2\""));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
         assert_eq!(nval.arguments.len(), 0);
@@ -844,9 +1193,107 @@ mod test {
         assert_eq!(&*nval.properties.get("prop1").unwrap().literal,
                    &Literal::String("1".into()));
 
-        let nval = parse(node(), "parent /-{\nchild\n}").unwrap();
+        let nval = single(parse(nodes(), "parent /-{\nchild\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 0);
+
+    }
+
+    #[test]
+    fn parse_node_err() {
+        err_eq!(parse(nodes(), "hello{"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "unclosed curly braces `{`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 5, "length": 1}},
+                    {"label": "expected `}`",
+                    "span": {"offset": 6, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+        err_eq!(parse(nodes(), "hello world"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "hello world {"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "identifiers cannot be used as arguments",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected identifier",
+                    "span": {"offset": 6, "length": 5}}
+                ],
+                "help": "consider enclosing in double quotes \"..\"",
+                "related": []
+            }, {
+                "message": "unclosed curly braces `{`",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "opened here",
+                    "span": {"offset": 12, "length": 1}},
+                    {"label": "expected `}`",
+                    "span": {"offset": 13, "length": 0}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "1 + 2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 0, "length": 1}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(nodes(), "-1 +2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 0, "length": 2}}
+                ],
+                "related": []
+            }]
+        }"#);
 
     }
 
@@ -862,6 +1309,44 @@ mod test {
         assert_eq!(nval[0].node_name.as_ref(), "second");
         assert_eq!(nval[0].children().len(), 0);
 
+    }
+
+    #[test]
+    fn parse_number() {
+        assert_eq!(parse(number(), "12").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "12".into())));
+        assert_eq!(parse(number(), "012").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "012".into())));
+        assert_eq!(parse(number(), "0").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "0".into())));
+        assert_eq!(parse(number(), "-012").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "-012".into())));
+        assert_eq!(parse(number(), "+0").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "+0".into())));
+        assert_eq!(parse(number(), "123_555").unwrap(),
+                   Literal::Int(Integer(Radix::Dec, "123555".into())));
+        assert_eq!(parse(number(), "123.555").unwrap(),
+                   Literal::Decimal(Decimal("123.555".into())));
+        assert_eq!(parse(number(), "+1_23.5_55E-17").unwrap(),
+                   Literal::Decimal(Decimal("+123.555E-17".into())));
+        assert_eq!(parse(number(), "123e+555").unwrap(),
+                   Literal::Decimal(Decimal("123e+555".into())));
+    }
+
+    #[test]
+    fn parse_radix_number() {
+        assert_eq!(parse(number(), "0x12").unwrap(),
+                   Literal::Int(Integer(Radix::Hex, "12".into())));
+        assert_eq!(parse(number(), "0xab_12").unwrap(),
+                   Literal::Int(Integer(Radix::Hex, "ab12".into())));
+        assert_eq!(parse(number(), "-0xab_12").unwrap(),
+                   Literal::Int(Integer(Radix::Hex, "-ab12".into())));
+        assert_eq!(parse(number(), "0o17").unwrap(),
+                   Literal::Int(Integer(Radix::Oct, "17".into())));
+        assert_eq!(parse(number(), "+0o17").unwrap(),
+                   Literal::Int(Integer(Radix::Oct, "+17".into())));
+        assert_eq!(parse(number(), "0b1010_101").unwrap(),
+                   Literal::Int(Integer(Radix::Bin, "1010101".into())));
     }
 
     #[test]
@@ -897,49 +1382,5 @@ mod test {
         assert_eq!(&*nval[0].properties.get("--x").unwrap().literal,
                    &Literal::Int(Integer(Radix::Dec, "2".into())));
     }
-
-    #[test]
-    fn parse_node_err() {
-        let err = parse(node(), "hello{").unwrap_err();
-        println!("{}", err);
-        println!("{:?}", err);
-        assert!(err.to_string().contains("Expected `}`"));
-        assert!(err.to_string().contains("unclosed block"));
-
-        let err = parse(node(), "hello world").unwrap_err();
-        println!("{}", err);
-        println!("{:?}", err);
-        assert!(err.to_string().contains("cannot be used as argument"));
-
-        let err = parse(node(), "hello world {").unwrap_err();
-        println!("{}", err);
-        println!("{:?}", err);
-        assert!(err.to_string().contains("cannot be used as argument"));
-    }
-
-    #[test]
-    fn parse_radix_number() {
-        assert_eq!(parse(number(), "0x12").unwrap(),
-                   Literal::Int(Integer(Radix::Hex, "12".into())));
-        assert_eq!(parse(number(), "0xab_12").unwrap(),
-                   Literal::Int(Integer(Radix::Hex, "ab12".into())));
-        assert_eq!(parse(number(), "0o17").unwrap(),
-                   Literal::Int(Integer(Radix::Oct, "17".into())));
-        assert_eq!(parse(number(), "0b1010_101").unwrap(),
-                   Literal::Int(Integer(Radix::Bin, "1010101".into())));
-    }
-
-    #[test]
-    fn parse_number() {
-        assert_eq!(parse(number(), "12").unwrap(),
-                   Literal::Int(Integer(Radix::Dec, "12".into())));
-        assert_eq!(parse(number(), "123_555").unwrap(),
-                   Literal::Int(Integer(Radix::Dec, "123555".into())));
-        assert_eq!(parse(number(), "123.555").unwrap(),
-                   Literal::Decimal(Decimal("123.555".into())));
-        assert_eq!(parse(number(), "+1_23.5_55E-17").unwrap(),
-                   Literal::Decimal(Decimal("+123.555e-17".into())));
-        assert_eq!(parse(number(), "123e+555").unwrap(),
-                   Literal::Decimal(Decimal("123e+555".into())));
-    }
 }
+

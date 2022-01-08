@@ -36,6 +36,6 @@ fn main() -> miette::Result<()> {
     std::io::stdin().read_to_string(&mut buf).into_diagnostic()?;
     let ast = knuffel::raw_parse(&buf)?;
     println!("{:#?}", ast);
-    //println!("{:#?}", Config::decode_children(&ast.nodes).into_diagnostic()?);
+    println!("{:#?}", Config::decode_children(&ast.nodes).into_diagnostic()?);
     Ok(())
 }

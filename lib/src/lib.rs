@@ -1,4 +1,3 @@
-mod chumsky;
 mod containers;
 mod convert;
 mod grammar;

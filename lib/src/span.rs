@@ -43,7 +43,7 @@ impl Into<miette::SourceSpan> for FileSpan {
 impl chumsky::Span for Span {
     type Context = ();
     type Offset = usize;
-    fn new(context: (), range: std::ops::Range<usize>) -> Self {
+    fn new(_context: (), range: std::ops::Range<usize>) -> Self {
         Span(range.start(), range.end())
     }
     fn context(&self) -> () { () }
@@ -60,32 +60,6 @@ impl chumsky::Span for FileSpan {
     fn context(&self) -> Arc<PathBuf> { self.0.clone() }
     fn start(&self) -> usize { (self.1).0 }
     fn end(&self) -> usize { (self.1).1 }
-}
-
-/// Adds custom span type ot the abstract syntax tree (AST) nodes
-pub trait SpanContext<P> {
-    type Span;
-    fn from_positions(&self, start: P, end: P) -> Self::Span;
-}
-
-pub(crate) struct SimpleContext;
-
-pub(crate) struct FileContext {
-    file_path: Arc<PathBuf>,
-}
-
-impl SpanContext<usize> for SimpleContext {
-    type Span = Span;
-    fn from_positions(&self, start: usize, end: usize) -> Self::Span {
-        Span(start, end)
-    }
-}
-
-impl SpanContext<usize> for FileContext {
-    type Span = FileSpan;
-    fn from_positions(&self, start: usize, end: usize) -> Self::Span {
-        FileSpan(self.file_path.clone(), Span(start, end))
-    }
 }
 
 impl<T, S> Spanned<T, S> {

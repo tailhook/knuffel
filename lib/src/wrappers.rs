@@ -1,14 +1,13 @@
-use ::chumsky::{Parser, Stream};
+use chumsky::{Parser, Stream};
 
 use crate::ast::Document;
-use crate::errors::RawError;
-use crate::errors::{RealError, ParseError, ParseErrorEnum, AddSource};
-use crate::chumsky;
-use crate::span::{Span, SimpleContext};
+use crate::errors::{RealError, ParseError, AddSource};
+use crate::grammar;
+use crate::span::Span;
 
 
 pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
-    chumsky::document()
+    grammar::document()
     .parse(Stream::from_iter(
         Span(text.len(), text.len()),
         text.char_indices()

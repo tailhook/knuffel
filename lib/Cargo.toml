@@ -11,7 +11,6 @@ homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
 
 [dependencies]
-combine = "4.6.2"
 #chumsky = "0.7.0"
 chumsky = { git="https://github.com/zesterer/chumsky" }
 knuffel-derive = {path="../derive", optional=true}
@@ -25,6 +24,5 @@ assert-json-diff = "2.0.1"
 serde_json = "1.0"
 
 [features]
-default = ["derive", "std", "base64"]
-std = ["combine/std"]
+default = ["derive", "base64"]
 derive = ["knuffel-derive"]
