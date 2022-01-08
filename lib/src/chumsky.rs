@@ -345,6 +345,7 @@ fn node_terminator() -> impl Parser<char, (), Error=Error> {
 enum PropOrArg<S> {
     Prop(SpannedName<S>, Value<S>),
     Arg(Value<S>),
+    Ignore,
 }
 
 fn value() -> impl Parser<char, Value<Span>, Error=Error> {
@@ -352,7 +353,7 @@ fn value() -> impl Parser<char, Value<Span>, Error=Error> {
     .map(|(type_name, literal)| Value { type_name, literal })
 }
 
-fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+fn prop_or_arg_inner() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     use PropOrArg::*;
     choice((
         spanned(bare_ident()).then_ignore(just('=')).then(value())
@@ -369,31 +370,52 @@ fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
     ))
 }
 
+fn prop_or_arg() -> impl Parser<char, PropOrArg<Span>, Error=Error> {
+    just("/-")
+        .ignore_then(node_space().repeated())
+        .ignore_then(prop_or_arg_inner())
+        .map(|_| PropOrArg::Ignore)
+    .or(prop_or_arg_inner())
+}
+
 fn line_space() -> impl Parser<char, (), Error=Error> {
     newline().or(ws()).or(comment())
 }
 
+
 fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
     use PropOrArg::*;
     recursive(|nodes| {
+        let braced_nodes = nodes
+            .delimited_by(just('{'), just('}'));
+            // TODO(tailhook) add recovery
+
         let node = spanned(type_name()).or_not()
             .then(spanned(ident()))
-            .then(node_space().repeated().at_least(1)
-                  .ignore_then(prop_or_arg())
-                  .repeated())
+            .then(
+                node_space()
+                .repeated().at_least(1)
+                .ignore_then(prop_or_arg())
+                .repeated()
+            )
             .then(node_space().repeated()
-                  .ignore_then(spanned(
-                          nodes.delimited_by(just('{'), just('}'))
-                  ))
+                  .ignore_then(just("/-")
+                               .then_ignore(node_space().repeated())
+                               .or_not())
+                  .then(spanned(braced_nodes))
                   .or_not())
             .then_ignore(node_terminator())
-            .map(|(((type_name, node_name), line_items), children)| {
+            .map(|(((type_name, node_name), line_items), opt_children)| {
                 let mut node = Node {
                     type_name,
                     node_name,
                     properties: BTreeMap::new(),
                     arguments: Vec::new(),
-                    children,
+                    children: match opt_children {
+                        Some((Some(_comment), _)) => None,
+                        Some((None, children)) => Some(children),
+                        None => None,
+                    },
                 };
                 for item in line_items {
                     match item {
@@ -403,10 +425,12 @@ fn nodes() -> impl Parser<char, Vec<SpannedNode<Span>>, Error=Error> {
                         Arg(value) => {
                             node.arguments.push(value);
                         }
+                        Ignore => {}
                     }
                 }
                 node
             });
+
         spanned(node)
             .separated_by(line_space().repeated())
             .allow_leading().allow_trailing()
