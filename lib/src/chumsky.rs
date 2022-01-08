@@ -48,6 +48,7 @@ fn id_char() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
 fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
@@ -62,6 +63,7 @@ fn id_sans_dig() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
 fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
@@ -76,10 +78,12 @@ fn id_sans_sign_dig() -> impl Parser<char, char, Error=Error> {
         // newline (excluding <= 0x20)
         '\u{0085}' | '\u{2028}' | '\u{2029}'
     ))
+    .map_err(|e: Error| e.with_expected_kind("letter"))
 }
 
 fn ws() -> impl Parser<char, (), Error=Error> {
     ws_char().repeated().at_least(1).ignored().or(ml_comment())
+    .map_err(|e| e.with_expected_kind("whitespace"))
 }
 
 fn comment() -> impl Parser<char, (), Error=Error> {
@@ -256,7 +260,21 @@ fn bare_ident() -> impl Parser<char, Box<str>, Error=Error> {
 }
 
 fn ident() -> impl Parser<char, Box<str>, Error=Error> {
-    choice((bare_ident(), string()))
+
+    choice((
+        // match -123 so `-` will not be treated as an ident by backtracking
+        number().map(Err),
+        bare_ident().map(Ok),
+        string().map(Ok),
+    ))
+    // when backtracking is not already possible,
+    // throw error for numbers (mapped to `Result::Err`)
+    .try_map(|res, span| res.map_err(|_| Error::Unexpected {
+        label: Some("unexpected number"),
+        position: span,
+        found: TokenFormat::Kind("number"),
+        expected: expected_kind("identifier"),
+    }))
 }
 
 fn keyword() -> impl Parser<char, Literal, Error=Error> {
@@ -698,7 +716,7 @@ mod test {
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "found `x`",
+                "message": "found `x`, expected whitespace",
                 "severity": "error",
                 "filename": "",
                 "labels": [
@@ -1006,6 +1024,41 @@ mod test {
     }
 
     #[test]
+    fn parse_type_err() {
+        err_eq!(parse(type_name(), "(123)"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 1, "length": 3}}
+                ],
+                "related": []
+            }]
+        }"#);
+
+        err_eq!(parse(type_name(), "(-1)"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 1, "length": 2}}
+                ],
+                "related": []
+            }]
+        }"#);
+    }
+
+    #[test]
     fn parse_node() {
         fn single<T, E: std::fmt::Debug>(r: Result<Vec<T>, E>) -> T {
             let mut v = r.unwrap();
@@ -1210,39 +1263,38 @@ mod test {
             }]
         }"#);
 
-        err_eq!(parse(nodes(), "-1 +2"), r#"{
-            "message": "error parsing KDL text",
-            "severity": "error",
-            "labels": [],
-            "related": [{
-                "message": "identifiers cannot be used as arguments",
-                "severity": "error",
-                "filename": "",
-                "labels": [
-                    {"label": "unexpected identifier",
-                    "span": {"offset": 6, "length": 5}}
-                ],
-                "help": "consider enclosing in double quotes \"..\"",
-                "related": []
-            }]
-        }"#);
-
         err_eq!(parse(nodes(), "1 + 2"), r#"{
             "message": "error parsing KDL text",
             "severity": "error",
             "labels": [],
             "related": [{
-                "message": "identifiers cannot be used as arguments",
+                "message": "found number, expected identifier",
                 "severity": "error",
                 "filename": "",
                 "labels": [
-                    {"label": "unexpected identifier",
-                    "span": {"offset": 6, "length": 5}}
+                    {"label": "unexpected number",
+                    "span": {"offset": 0, "length": 1}}
                 ],
-                "help": "consider enclosing in double quotes \"..\"",
                 "related": []
             }]
         }"#);
+
+        err_eq!(parse(nodes(), "-1 +2"), r#"{
+            "message": "error parsing KDL text",
+            "severity": "error",
+            "labels": [],
+            "related": [{
+                "message": "found number, expected identifier",
+                "severity": "error",
+                "filename": "",
+                "labels": [
+                    {"label": "unexpected number",
+                    "span": {"offset": 0, "length": 2}}
+                ],
+                "related": []
+            }]
+        }"#);
+
     }
 
     #[test]
