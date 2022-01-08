@@ -1034,5 +1034,39 @@ mod test {
         assert_eq!(parse(number(), "0b1010_101").unwrap(),
                    Literal::Int(Integer(Radix::Bin, "1010101".into())));
     }
+
+    #[test]
+    fn parse_dashes() {
+        let nval = parse(nodes(), "-").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "-");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "--").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "--");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "--1").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].node_name.as_ref(), "--1");
+        assert_eq!(nval[0].children().len(), 0);
+
+        let nval = parse(nodes(), "-\n-").unwrap();
+        assert_eq!(nval.len(), 2);
+        assert_eq!(nval[0].node_name.as_ref(), "-");
+        assert_eq!(nval[0].children().len(), 0);
+        assert_eq!(nval[1].node_name.as_ref(), "-");
+        assert_eq!(nval[1].children().len(), 0);
+
+        let nval = parse(nodes(), "node -1 --x=2").unwrap();
+        assert_eq!(nval.len(), 1);
+        assert_eq!(nval[0].arguments.len(), 1);
+        assert_eq!(nval[0].properties.len(), 1);
+        assert_eq!(&*nval[0].arguments[0].literal,
+                   &Literal::Int(Integer(Radix::Dec, "-1".into())));
+        assert_eq!(&*nval[0].properties.get("--x").unwrap().literal,
+                   &Literal::Int(Integer(Radix::Dec, "2".into())));
+    }
 }
 
