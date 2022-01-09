@@ -12,6 +12,6 @@ pub mod traits;
 #[cfg(feature="derive")]
 pub use knuffel_derive::{Decode, DecodeScalar};
 
-pub use wrappers::raw_parse;
+pub use wrappers::parse_ast;
 pub use traits::{Decode, DecodeScalar, DecodeChildren};
 pub use errors::Error;

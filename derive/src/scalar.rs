@@ -78,7 +78,6 @@ pub fn emit_scalar(s: &Scalar) -> syn::Result<TokenStream> {
 
 pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     let e_name = &e.ident;
-    let t_name_err = format!("unexpected type name for {}", e_name);
     let value_err = if e.variants.len() <= 3 {
         format!("expected one of {}",
                 e.variants.iter()
@@ -101,29 +100,40 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
         impl<S: ::knuffel::traits::Span> ::knuffel::DecodeScalar<S>
                 for #e_name {
             fn raw_decode(val: &::knuffel::span::Spanned<
-                          ::knuffel::ast::Literal, S>)
-                -> Result<#e_name, ::knuffel::Error<S>>
+                          ::knuffel::ast::Literal, S>,
+                          ctx: &mut ::knuffel::decode::Context)
+                -> Result<#e_name, ::knuffel::DecodeError<S>>
             {
                 match &**val {
                     ::knuffel::ast::Literal::String(ref s) => {
                         match &s[..] {
                             #(#match_branches,)*
-                            _ => Err(::knuffel::Error::new(
-                                    val.span(), #value_err)),
+                            _ => {
+                                Err(::knuffel::errors::DecodeError::convert(
+                                        val, #value_err))
+                            }
                         }
                     }
-                    _ => Err(::knuffel::Error::new(val.span(),
-                                                   "expected string value")),
+                    _ => {
+                        Err(::knuffel::errors::DecodeError::scalar_kind(
+                            ::knuffel::decode::Kind::String,
+                            &val.literal
+                        ))
+                    }
                 }
             }
             fn type_check(type_name: &Option<::knuffel::span::Spanned<
-                          ::knuffel::ast::TypeName, S>>)
-                -> Result<(), ::knuffel::Error<S>>
+                          ::knuffel::ast::TypeName, S>>
+                          ctx: &mut ::knuffel::decode::Context)
             {
                 if let Some(typ) = type_name {
-                    return Err(::knuffel::Error::new(typ.span(), #t_name_err));
+                    ctx.emit_error(::knuffel::errors::DecodeError::TypeName {
+                        span: type_name.span(),
+                        found: Some(type_name.clone()),
+                        expected: ExpectedType::no_type(),
+                        rust_type: #e_name,
+                    });
                 }
-                Ok(())
             }
         }
     })

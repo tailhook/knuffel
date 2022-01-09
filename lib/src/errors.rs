@@ -5,11 +5,11 @@ use std::fmt::{self, Write};
 use thiserror::Error;
 use miette::Diagnostic;
 
+use crate::ast::{TypeName, Literal};
+use crate::span::Spanned;
+use crate::decode::Kind;
 use crate::traits::Span;
 
-pub(crate) trait ResultExt<T, S: Clone> {
-    fn err_span(self, s: &S) -> Result<T, Error<S>>;
-}
 
 #[derive(Debug, Diagnostic, Error)]
 #[error("{}", error)]
@@ -22,7 +22,7 @@ pub(crate) struct AddSource<E: Diagnostic + 'static> {
 
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
-pub enum RealError {
+pub enum Error {
     #[error("syntax error")]
     #[diagnostic(transparent)]
     Syntax(Box<dyn Diagnostic + Send + Sync + 'static>),
@@ -33,15 +33,38 @@ pub enum RealError {
 
 #[derive(Debug, Diagnostic, Error)]
 pub enum DecodeError<S: Span> {
-    #[error("invalid type")]
+    #[error("{} for {}, found {}", expected, rust_type,
+            found.as_ref().map(|x| x.as_str()).unwrap_or("no type name"))]
     #[diagnostic()]
-    TypeName { span: S },
-    #[error("invalid scalar type")]
+    TypeName {
+        #[label="unexpected type name"]
+        span: S,
+        found: Option<TypeName>,
+        expected: ExpectedType,
+        rust_type: &'static str,
+    },
     #[diagnostic()]
-    ScalarType {},
-    #[error("invalid value")]
+    #[error("expected {} scalar, found {}", expected, found)]
+    ScalarKind {
+        #[label("unexpected {}", found)]
+        span: S,
+        expected: ExpectedKind,
+        found: Kind,
+    },
+    #[error("{}", source)]
     #[diagnostic()]
-    Convert {},
+    Conversion {
+        #[label("invalid value")]
+        span: S,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("{}", message)]
+    #[diagnostic()]
+    Unsupported {
+        #[label="unsupported value"]
+        span: S,
+        message: Cow<'static, str>,
+    },
     #[error(transparent)]
     Custom(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
@@ -288,102 +311,92 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
     }
 }
 
-/*
-#[derive(Debug, Diagnostic, Error)]
-#[error("error converting value to type {}", type_name)]
-struct Convert<E: std::error::Error + Send + Sync + 'static> {
-    span: miette::SourceSpan,
-    type_name: &'static str,
-    #[source]
-    error: E,
-}
-*/
-
-#[derive(Debug)]
-pub enum InnerError {
-    Static(&'static str),
-    Text(Box<str>),
-    Wraps(Box<dyn std::error::Error + Send + Sync + 'static>),
-}
-
-#[derive(Debug)]
-pub struct Error<S> {
-    span: Option<S>,
-    inner: InnerError,
-}
-
-impl<S: fmt::Display + fmt::Debug> std::error::Error for Error<S> {}
-
-impl<S: Clone> Error<S>  {
-    pub fn new(span: &S, text: impl Into<Cow<'static, str>>)
-        -> Error<S>
-    {
-        match text.into() {
-            Cow::Borrowed(txt) => {
-                Error {
-                    span: Some(span.clone()),
-                    inner: InnerError::Static(txt),
-                }
-            }
-            Cow::Owned(txt) => {
-                Error {
-                    span: Some(span.clone()),
-                    inner: InnerError::Text(txt.into()),
-                }
-            }
-        }
-    }
-    pub fn ensure_span(mut self, span: &S) -> Error<S> {
-        if self.span.is_none() {
-            self.span = Some(span.clone());
-        }
-        self
-    }
-    pub fn from_err<E>(span: &S, err: E) -> Error<S>
+impl<S: Span> DecodeError<S> {
+    pub fn conversion<T, E>(span: &Spanned<T, S>, err: E) -> Self
         where E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     {
-        Error {
-            span: Some(span.clone()),
-            inner: InnerError::Wraps(err.into()),
+        DecodeError::Conversion {
+            span: span.span().clone(),
+            source: err.into(),
         }
     }
-    pub fn new_global(text: impl Into<Cow<'static, str>>) -> Error<S> {
-        match text.into() {
-            Cow::Borrowed(txt) => {
-                Error {
-                    span: None,
-                    inner: InnerError::Static(txt),
-                }
-            }
-            Cow::Owned(txt) => {
-                Error {
-                    span: None,
-                    inner: InnerError::Text(txt.into()),
-                }
-            }
+    pub fn scalar_kind(expected: Kind, found: &Spanned<Literal, S>) -> Self {
+        DecodeError::ScalarKind {
+            span: found.span().clone(),
+            expected: expected.into(),
+            found: (&found.value).into(),
+        }
+    }
+    pub fn unsupported<T, M>(span: &Spanned<T, S>, message: M)-> Self
+        where M: Into<Cow<'static, str>>,
+    {
+        DecodeError::Unsupported {
+            span: span.span().clone(),
+            message: message.into(),
         }
     }
 }
 
-impl<S: fmt::Display> fmt::Display for Error<S> {
+#[derive(Debug)]
+pub struct ExpectedType {
+    types: Vec<TypeName>,
+    no_type: bool,
+}
+
+impl ExpectedType {
+    pub fn no_type() -> Self {
+        ExpectedType {
+            types: [].into(),
+            no_type: true,
+        }
+    }
+    pub fn required(ty: impl Into<TypeName>) -> Self {
+        ExpectedType {
+            types: vec![ty.into()],
+            no_type: false,
+        }
+    }
+    pub fn optional(ty: impl Into<TypeName>) -> Self {
+        ExpectedType {
+            types: vec![ty.into()],
+            no_type: true,
+        }
+    }
+}
+
+impl fmt::Display for ExpectedType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(span) = &self.span {
-            span.fmt(f)?;
-            ": ".fmt(f)?;
+        if self.types.is_empty() {
+            write!(f, "no type")
+        } else {
+            let mut iter = self.types.iter();
+            if let Some(first) = iter.next() {
+                write!(f, "{}", first)?;
+            }
+            let last = iter.next_back();
+            for item in iter {
+                write!(f, ", {}", item)?;
+            }
+            if let Some(last) = last {
+                write!(f, " or {}", last)?;
+            }
+            Ok(())
         }
-        match &self.inner {
-            InnerError::Static(s) => s.fmt(f)?,
-            InnerError::Text(s) => s.fmt(f)?,
-            InnerError::Wraps(e) => e.fmt(f)?,
-        }
-        Ok(())
     }
 }
 
-impl<R, E, S: Clone> ResultExt<R, S> for Result<R, E>
-    where E: std::error::Error + Send + Sync + 'static,
-{
-    fn err_span(self, s: &S) -> Result<R, Error<S>> {
-        self.map_err(|e| Error::from_err(s, e))
+
+#[derive(Debug)]
+pub struct ExpectedKind(Kind);
+
+impl From<Kind> for ExpectedKind {
+    fn from(kind: Kind) -> ExpectedKind {
+        ExpectedKind(kind)
+    }
+}
+
+impl fmt::Display for ExpectedKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0.as_str())
     }
 }

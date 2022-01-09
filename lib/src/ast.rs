@@ -98,7 +98,7 @@ impl<S> Node<S> {
 }
 
 impl BuiltinType {
-    fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         use BuiltinType::*;
         match self {
             U8 => "u8",
@@ -111,6 +111,9 @@ impl BuiltinType {
             I64 => "i64",
             Base64 => "base64",
         }
+    }
+    pub const fn as_type(self) -> TypeName {
+        TypeName(TypeNameInner::Builtin(self))
     }
 }
 
@@ -139,7 +142,7 @@ impl TypeName {
             TypeNameInner::Custom(t) => t.as_ref(),
         }
     }
-    pub fn as_builtin(&self) -> Option<&BuiltinType> {
+    pub const fn as_builtin(&self) -> Option<&BuiltinType> {
         match &self.0 {
             TypeNameInner::Builtin(t) => Some(t),
             TypeNameInner::Custom(_) => None,
@@ -157,5 +160,11 @@ impl std::ops::Deref for TypeName {
 impl fmt::Display for TypeName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.as_str().fmt(f)
+    }
+}
+
+impl Into<TypeName> for BuiltinType {
+    fn into(self) -> TypeName {
+        self.as_type()
     }
 }

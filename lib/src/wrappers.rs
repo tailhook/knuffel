@@ -1,12 +1,12 @@
 use chumsky::{Parser, Stream};
 
 use crate::ast::Document;
-use crate::errors::{RealError, ParseError, AddSource};
+use crate::errors::{Error, ParseError, AddSource};
 use crate::grammar;
 use crate::span::Span;
 
 
-pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
+pub fn parse_ast(text: &str) -> Result<Document<Span>, Error> {
     grammar::document()
     .parse(Stream::from_iter(
         Span(text.len(), text.len()),
@@ -23,9 +23,28 @@ pub fn raw_parse(text: &str) -> Result<Document<Span>, RealError> {
                 }
             }).collect(),
         };
-        RealError::Syntax(Box::new(e))
+        Error::Syntax(Box::new(e))
     })
 }
+
+/*
+pub fn decode_ast<T, S>(ast: &Document<S>) -> Result<T, Error>
+    where T: DecodeChildren<S>,
+          S: crate::traits::Span,
+{
+    let mut ctx = Context::new();
+    match DecodeChildren::decode_children(ast, &mut ctx) {
+        Ok(v) if ctx.has_errors() {
+            Err(ctx.into_error())
+        }
+        Err(e) => {
+            ctx.emit_error(e);
+            Err(ctx.into_error())
+        }
+        Ok(v) => Ok(v)
+    }
+}
+*/
 
 #[test]
 fn normal() {

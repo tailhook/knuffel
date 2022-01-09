@@ -1,9 +1,11 @@
 use std::str::FromStr;
 use std::path::PathBuf;
+use std::default::Default;
 
 use crate::ast::{Literal, Integer, Radix, TypeName, BuiltinType};
+use crate::decode::{Context, Kind};
+use crate::errors::{DecodeError, ExpectedType};
 use crate::span::{Spanned};
-use crate::errors::{Error, ResultExt};
 use crate::traits::{Span, DecodeScalar};
 
 
@@ -23,29 +25,40 @@ macro_rules! impl_integer {
         }
 
         impl<S: Span> DecodeScalar<S> for $typ {
-            fn raw_decode(val: &Spanned<Literal, S>) -> Result<$typ, Error<S>>
+            fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context)
+                -> Result<$typ, DecodeError<S>>
             {
                 match &**val {
                     Literal::Int(ref value) => {
-                        value.try_into().err_span(val.span())
+                        match value.try_into() {
+                            Ok(val) => Ok(val),
+                            Err(e) => {
+                                ctx.emit_error(DecodeError::conversion(val, e));
+                                Ok(0)
+                            }
+                        }
                     }
-                    _ => Err(Error::new(val.span(), "expected integer value")),
+                    _ => {
+                        ctx.emit_error(DecodeError::scalar_kind(
+                                Kind::String, val));
+                        Ok(0)
+                    }
                 }
             }
-            fn type_check(type_name: &Option<Spanned<TypeName, S>>)
-                -> Result<(), Error<S>>
+            fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                          ctx: &mut Context)
             {
                 if let Some(typ) = type_name {
                     if typ.as_builtin() != Some(&BuiltinType::$marker) {
-                        return Err(Error::new(typ.span(),
-                            format!(concat!("expected type `",
-                                            stringify!($typ),
-                                            "`, found `{}`"),
-                                    typ.as_str().escape_default())
-                        ));
+                        ctx.emit_error(DecodeError::TypeName {
+                            span: typ.span().clone(),
+                            found: Some(typ.value.clone()),
+                            expected: ExpectedType::optional(
+                                BuiltinType::$marker),
+                            rust_type: stringify!($typ),
+                        });
                     }
                 }
-                Ok(())
             }
         }
     }
@@ -61,56 +74,77 @@ impl_integer!(i64, I64);
 impl_integer!(u64, U64);
 
 impl<S: Span> DecodeScalar<S> for String {
-    fn raw_decode(val: &Spanned<Literal, S>) -> Result<String, Error<S>> {
+    fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context)
+        -> Result<String, DecodeError<S>>
+    {
         match &**val {
             Literal::String(ref s) => Ok(s.clone().into()),
-            _ => Err(Error::new(val.span(), "expected string value")),
+            _ => {
+                ctx.emit_error(DecodeError::scalar_kind(Kind::String, val));
+                Ok(String::new())
+            }
         }
     }
-    fn type_check(type_name: &Option<Spanned<TypeName, S>>)
-        -> Result<(), Error<S>>
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>, ctx: &mut Context)
     {
         if let Some(typ) = type_name {
-            return Err(Error::new(typ.span(),
-                format!("unexpected type name for String")));
+            ctx.emit_error(DecodeError::TypeName {
+                span: typ.span().clone(),
+                found: Some(typ.value.clone()),
+                expected: ExpectedType::no_type(),
+                rust_type: "String",
+            });
         }
-        Ok(())
     }
 }
 
 
 impl<S: Span> DecodeScalar<S> for PathBuf {
-    fn raw_decode(val: &Spanned<Literal, S>) -> Result<PathBuf, Error<S>> {
+    fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context)
+        -> Result<PathBuf, DecodeError<S>>
+    {
         match &**val {
             Literal::String(ref s) => Ok(String::from(s.clone()).into()),
-            _ => Err(Error::new(val.span(), "expected string value")),
+            _ => {
+                ctx.emit_error(DecodeError::scalar_kind(Kind::String, val));
+                Ok(Default::default())
+            }
         }
     }
-    fn type_check(type_name: &Option<Spanned<TypeName, S>>)
-        -> Result<(), Error<S>>
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>, ctx: &mut Context)
     {
         if let Some(typ) = type_name {
-            return Err(Error::new(typ.span(),
-                format!("unexpected type name for PathBuf")));
+            ctx.emit_error(DecodeError::TypeName {
+                span: typ.span().clone(),
+                found: Some(typ.value.clone()),
+                expected: ExpectedType::no_type(),
+                rust_type: "PathBuf",
+            });
         }
-        Ok(())
     }
 }
 
 impl<S: Span> DecodeScalar<S> for bool {
-    fn raw_decode(val: &Spanned<Literal, S>) -> Result<bool, Error<S>> {
+    fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context)
+        -> Result<bool, DecodeError<S>>
+    {
         match &**val {
             Literal::Bool(value) => Ok(*value),
-            _ => Err(Error::new(val.span(), "expected integer value")),
+            _ => {
+                ctx.emit_error(DecodeError::scalar_kind(Kind::Bool, &val));
+                Ok(Default::default())
+            }
         }
     }
-    fn type_check(type_name: &Option<Spanned<TypeName, S>>)
-        -> Result<(), Error<S>>
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>, ctx: &mut Context)
     {
         if let Some(typ) = type_name {
-            return Err(Error::new(typ.span(),
-                format!("unexpected type name for bool")));
+            ctx.emit_error(DecodeError::TypeName {
+                span: typ.span().clone(),
+                found: Some(typ.value.clone()),
+                expected: ExpectedType::no_type(),
+                rust_type: "bool",
+            });
         }
-        Ok(())
     }
 }
