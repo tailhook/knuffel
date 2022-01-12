@@ -57,10 +57,32 @@ impl<T> ErrorSpan for T
 {}
 
 
-pub trait Span: parsing_span::Sealed + chumsky::Span + ErrorSpan {}
+pub trait Span: sealed::Sealed + chumsky::Span + ErrorSpan {}
 
-pub(crate) mod parsing_span {
+pub(crate) mod sealed {
+    pub type Stream<'a, S, T> = chumsky::Stream<
+        'a, char, S, Map<std::str::Chars<'a>, T>
+    >;
+
+    pub struct Map<I, F>(pub(crate) I, pub(crate) F);
+
+    pub trait SpanTracker {
+        type Span;
+        fn next_span(&mut self, c: char) -> Self::Span;
+    }
+
+    impl<I, T> Iterator for Map<I, T>
+         where I: Iterator<Item=char>,
+               T: SpanTracker,
+    {
+        type Item = (char, T::Span);
+        fn next(&mut self) -> Option<(char, T::Span)> {
+            self.0.next().map(|c| (c, self.1.next_span(c)))
+        }
+    }
+
     pub trait Sealed {
+        type Tracker: SpanTracker<Span=Self>;
         /// Note assuming ascii, single-width, non-newline chars here
         fn at_start(&self, chars: usize) -> Self;
         fn at_end(&self) -> Self;
@@ -68,7 +90,7 @@ pub(crate) mod parsing_span {
         fn before_start(&self, chars: usize) -> Self;
         fn length(&self) -> usize;
 
-        fn stream(s: &str) -> chumsky::Stream<'_, char, Self, std::iter::Map<std::str::CharIndices<'_>, fn((usize, char)) -> (char, Self)>>
+        fn stream(s: &str) -> Stream<'_, Self, Self::Tracker>
             where Self: chumsky::Span;
     }
 }

@@ -20,14 +20,30 @@ pub struct Span(pub usize, pub usize);
 // TODO(tailhook) optimize eq to check only offset
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LinePos {
-    line: usize,
-    column: usize,
-    offset: usize,
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
 }
 
 /// Span with line and column number
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineSpan(pub LinePos, pub LinePos);
+
+mod sealed {
+
+    pub struct OffsetTracker {
+        pub(crate) offset: usize,
+    }
+
+    #[cfg(feature="line-numbers")]
+    pub struct LineTracker {
+        pub(crate) offset: usize,
+        pub(crate) caret_return: bool,
+        pub(crate) line: usize,
+        pub(crate) column: usize,
+    }
+
+}
 
 
 impl Span {
@@ -58,8 +74,18 @@ impl chumsky::Span for Span {
     fn start(&self) -> usize { self.0 }
     fn end(&self) -> usize { self.1 }
 }
+impl traits::sealed::SpanTracker for sealed::OffsetTracker {
+    type Span = Span;
+    fn next_span(&mut self, c: char) -> Span {
+        let start = self.offset;
+        self.offset += c.len_utf8();
+        Span(start, self.offset)
+    }
+}
 
-impl traits::parsing_span::Sealed for Span {
+
+impl traits::sealed::Sealed for Span {
+    type Tracker = sealed::OffsetTracker;
     fn at_start(&self, chars: usize) -> Self {
         Span(self.0, self.0+chars)
     }
@@ -76,19 +102,18 @@ impl traits::parsing_span::Sealed for Span {
         self.1.saturating_sub(self.0)
     }
 
-    fn stream(text: &str) -> chumsky::Stream<'_, char, Self, std::iter::Map<std::str::CharIndices<'_>, fn((usize, char)) -> (char, Self)>>
+    fn stream(text: &str) -> traits::sealed::Stream<'_, Self, Self::Tracker>
         where Self: chumsky::Span
     {
         chumsky::Stream::from_iter(
             Span(text.len(), text.len()),
-            text.char_indices()
-                .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
+            traits::sealed::Map(text.chars(),
+                                sealed::OffsetTracker { offset: 0 }),
         )
     }
 }
 
 impl traits::Span for Span {}
-
 
 impl chumsky::Span for LineSpan {
     type Context = ();
@@ -101,7 +126,45 @@ impl chumsky::Span for LineSpan {
     fn end(&self) -> LinePos { self.1 }
 }
 
-impl traits::parsing_span::Sealed for LineSpan {
+#[cfg(feature="line-numbers")]
+impl traits::sealed::SpanTracker for sealed::LineTracker {
+    type Span = LineSpan;
+    fn next_span(&mut self, c: char) -> LineSpan {
+        let offset = self.offset;
+        let line = self.line;
+        let column = self.column;
+        self.offset += c.len_utf8();
+        match c {
+            '\n' if self.caret_return => {}
+            '\r'|'\n'|'\x0C'|'\u{0085}'|'\u{2028}'|'\u{2029}' => {
+                self.line += 1;
+                self.column = 0;
+            }
+            '\t' => self.column += 8,
+            c => {
+                self.column += unicode_width::UnicodeWidthChar::width(c)
+                    .unwrap_or(0);  // treat control chars as zero-length
+            }
+        }
+        self.caret_return = c == '\r';
+        LineSpan(
+            LinePos {
+                line,
+                column,
+                offset,
+            },
+            LinePos {
+                line: self.line,
+                column: self.column,
+                offset: self.offset,
+            },
+        )
+    }
+}
+
+#[cfg(feature="line-numbers")]
+impl traits::sealed::Sealed for LineSpan {
+    type Tracker = sealed::LineTracker;
     /// Note assuming ascii, single-width, non-newline chars here
     fn at_start(&self, chars: usize) -> Self {
         LineSpan(self.0, LinePos {
@@ -128,10 +191,42 @@ impl traits::parsing_span::Sealed for LineSpan {
         self.1.offset.saturating_sub(self.0.offset)
     }
 
-    fn stream(s: &str) -> chumsky::Stream<'_, char, Self, std::iter::Map<std::str::CharIndices<'_>, fn((usize, char)) -> (char, Self)>>
+    fn stream(text: &str) -> traits::sealed::Stream<'_, Self, Self::Tracker>
         where Self: chumsky::Span
     {
-        todo!();
+        let mut caret_return = false;
+        let mut line = 0;
+        let mut last_line = text;
+        let mut iter = text.chars();
+        while let Some(c) = iter.next() {
+            match c {
+                '\n' if caret_return => {}
+                '\r'|'\n'|'\x0C'|'\u{0085}'|'\u{2028}'|'\u{2029}' => {
+                    line += 1;
+                    last_line = iter.as_str();
+                }
+                _ => {}
+            }
+            caret_return = c == '\r';
+        }
+        let column = unicode_width::UnicodeWidthStr::width(last_line);
+        let eoi = LinePos {
+            line,
+            column,
+            offset: text.len(),
+        };
+        chumsky::Stream::from_iter(
+            LineSpan(eoi, eoi),
+            traits::sealed::Map(
+                text.chars(),
+                sealed::LineTracker {
+                    caret_return: false,
+                    offset: 0,
+                    line: 0,
+                    column: 0,
+                },
+            ),
+        )
     }
 }
 

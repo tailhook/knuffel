@@ -1,4 +1,4 @@
-use chumsky::{Parser, Stream};
+use chumsky::Parser;
 
 use crate::ast::Document;
 use crate::decode::Context;
@@ -8,17 +8,11 @@ use crate::span::{Span};
 use crate::traits::{self, DecodeChildren};
 
 
-pub fn parse_ast(file_name: &str, text: &str)
-    -> Result<Document<Span>, Error<Span>>
+pub fn parse_ast<S: traits::Span>(file_name: &str, text: &str)
+    -> Result<Document<S>, Error<S>>
 {
     grammar::document()
-    .parse(
-        Stream::from_iter(
-        Span(text.len(), text.len()),
-        text.char_indices()
-            .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
-        )
-    )
+    .parse(S::stream(text))
     .map_err(|errors| {
         let source_code = KdlSource::new(file_name, text.to_string());
         let e = SyntaxErrors {
@@ -45,23 +39,10 @@ pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
           T: DecodeChildren<S>,
           S: traits::Span,
 {
+    let ast = parse_ast(file_name, text)?;
+
     let mut ctx = Context::new();
     set_ctx(&mut ctx);
-    let ast = grammar::document()
-        .parse(S::stream(text))
-        .map_err(|errors| {
-            let source_code = KdlSource::new(file_name, text.to_string());
-            let e = SyntaxErrors {
-                errors: errors.into_iter().map(|error| {
-                    AddSource {
-                        source_code: source_code.clone(),
-                        error,
-                    }
-                }).collect(),
-            };
-            Error::Syntax(e)
-        })?;
-
     let errors = match DecodeChildren::decode_children(&ast.nodes, &mut ctx) {
         Ok(_) if ctx.has_errors() => {
             ctx.into_errors()
