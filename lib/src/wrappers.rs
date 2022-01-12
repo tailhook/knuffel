@@ -36,28 +36,7 @@ pub fn parse_ast(file_name: &str, text: &str)
 pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
     where T: DecodeChildren<Span>,
 {
-    let ast = parse_ast(file_name, text)?;
-    let mut ctx = Context::new();
-    let errors = match DecodeChildren::decode_children(&ast.nodes, &mut ctx) {
-        Ok(_) if ctx.has_errors() => {
-            ctx.into_errors()
-        }
-        Err(e) => {
-            ctx.emit_error(e);
-            ctx.into_errors()
-        }
-        Ok(v) => return Ok(v)
-    };
-    let source_code = KdlSource::new(file_name, text.to_string());
-    let e = DecodeErrors {
-        errors: errors.into_iter().map(|error| {
-            AddSource {
-                source_code: source_code.clone(),
-                error,
-            }
-        }).collect(),
-    };
-    Err(Error::Decode(e))
+    parse_with_context(file_name, text, |_| {})
 }
 
 pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
