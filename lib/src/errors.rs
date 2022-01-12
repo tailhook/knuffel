@@ -1,38 +1,42 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
+use std::sync::Arc;
 
 use thiserror::Error;
-use miette::Diagnostic;
+use miette::{Diagnostic, NamedSource, SourceCode};
 
 use crate::ast::{TypeName, Literal};
-use crate::span::Spanned;
+use crate::span::{Spanned};
 use crate::decode::Kind;
-use crate::traits::Span;
+use crate::traits::{ErrorSpan, Span};
 
 
 #[derive(Debug, Diagnostic, Error)]
 #[error("{}", error)]
 #[diagnostic(forward(error))]
-pub(crate) struct AddSource<E: Diagnostic + 'static> {
+pub(crate) struct AddSource<E: Diagnostic + Send + Sync + 'static> {
     #[source_code]
-    pub source_code: std::sync::Arc<String>,
+    pub source_code: KdlSource,
     pub error: E,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct KdlSource(Arc<NamedSource>);
+
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
-pub enum Error {
+pub enum Error<E: ErrorSpan> {
     #[error("syntax error")]
     #[diagnostic(transparent)]
-    Syntax(Box<dyn Diagnostic + Send + Sync + 'static>),
+    Syntax(SyntaxErrors<E>),
     #[error("decode error")]
     #[diagnostic(transparent)]
-    Decode(Box<dyn Diagnostic + Send + Sync + 'static>),
+    Decode(DecodeErrors<E>),
 }
 
 #[derive(Debug, Diagnostic, Error)]
-pub enum DecodeError<S: Span> {
+pub enum DecodeError<S: ErrorSpan> {
     #[error("{} for {}, found {}", expected, rust_type,
             found.as_ref().map(|x| x.as_str()).unwrap_or("no type name"))]
     #[diagnostic()]
@@ -69,13 +73,20 @@ pub enum DecodeError<S: Span> {
     Custom(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
-
 #[derive(Debug, Diagnostic, Error)]
 #[error("KDL syntax error")]
 #[diagnostic()]
-pub(crate) struct ParseError<S: Span> {
+pub struct SyntaxErrors<S: ErrorSpan> {
     #[related]
     pub(crate) errors: Vec<AddSource<ParseErrorEnum<S>>>,
+}
+
+#[derive(Debug, Diagnostic, Error)]
+#[error("KDL decode error")]
+#[diagnostic()]
+pub struct DecodeErrors<S: ErrorSpan> {
+    #[related]
+    pub(crate) errors: Vec<AddSource<DecodeError<S>>>,
 }
 
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
@@ -91,7 +102,7 @@ pub(crate) enum TokenFormat {
 struct FormatUnexpected<'x>(&'x TokenFormat, &'x BTreeSet<TokenFormat>);
 
 #[derive(Debug, Diagnostic, Error)]
-pub(crate) enum ParseErrorEnum<S: Span> {
+pub(crate) enum ParseErrorEnum<S: ErrorSpan> {
     #[error("{}", FormatUnexpected(found, expected))]
     #[diagnostic()]
     Unexpected {
@@ -211,16 +222,7 @@ impl fmt::Display for FormatUnexpected<'_> {
     }
 }
 
-impl<S: Span> ParseErrorEnum<S> {
-    pub(crate) fn span(&self) -> &S {
-        use ParseErrorEnum::*;
-        match self {
-            Unexpected { position, .. } => position,
-            Unclosed { expected_at, .. } => expected_at,
-            Message { position, .. } => position,
-            MessageWithHelp { position, .. } => position,
-        }
-    }
+impl<S: ErrorSpan> ParseErrorEnum<S> {
     pub(crate) fn with_expected_token(mut self, token: &'static str) -> Self {
         use ParseErrorEnum::*;
         match &mut self {
@@ -250,6 +252,23 @@ impl<S: Span> ParseErrorEnum<S> {
             _ => {},
         }
         self
+    }
+    #[allow(dead_code)]
+    pub(crate) fn map_span<T>(self, f: impl Fn(S) -> T) -> ParseErrorEnum<T>
+        where T: ErrorSpan,
+    {
+        use ParseErrorEnum::*;
+        match self {
+            Unexpected { label, position, found, expected }
+            => Unexpected { label, position: f(position), found, expected },
+            Unclosed { label, opened_at, opened, expected_at, expected, found }
+            => Unclosed { label, opened_at: f(opened_at), opened,
+                          expected_at: f(expected_at), expected, found },
+            Message { label, position, message }
+            => Message { label, position: f(position), message },
+            MessageWithHelp { label, position, message, help }
+            => MessageWithHelp { label, position: f(position), message, help },
+        }
     }
 }
 
@@ -284,10 +303,9 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
             (Unclosed { .. }, _) => self,
             (_, other@Unclosed { .. }) => other,
             (Unexpected { expected: ref mut dest, .. },
-             Unexpected { position, expected, .. })
+             Unexpected { expected, .. })
             => {
                 dest.extend(expected.into_iter());
-                assert_eq!(self.span().start(), position.start());
                 self
             }
             (_, other) => todo!("{} -> {}", self, other),
@@ -311,7 +329,7 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
     }
 }
 
-impl<S: Span> DecodeError<S> {
+impl<S: ErrorSpan> DecodeError<S> {
     pub fn conversion<T, E>(span: &Spanned<T, S>, err: E) -> Self
         where E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     {
@@ -335,7 +353,26 @@ impl<S: Span> DecodeError<S> {
             message: message.into(),
         }
     }
+    #[allow(dead_code)]
+    pub(crate) fn map_span<T>(self, mut f: impl FnMut(S) -> T)
+        -> DecodeError<T>
+        where T: ErrorSpan,
+    {
+        use DecodeError::*;
+        match self {
+            TypeName { span, found, expected, rust_type }
+            => TypeName { span: f(span), found, expected, rust_type },
+            ScalarKind { span, expected, found }
+            => ScalarKind { span: f(span), expected, found },
+            Conversion { span, source }
+            => Conversion { span: f(span), source },
+            Unsupported { span, message }
+            => Unsupported { span: f(span), message },
+            Custom(e) => Custom(e),
+        }
+    }
 }
+
 
 #[derive(Debug)]
 pub struct ExpectedType {
@@ -398,5 +435,24 @@ impl From<Kind> for ExpectedKind {
 impl fmt::Display for ExpectedKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0.as_str())
+    }
+}
+
+impl KdlSource {
+    pub(crate) fn new(path: impl AsRef<str>,
+                      source: impl SourceCode + Send + Sync + 'static) -> Self
+    {
+        KdlSource(Arc::new(NamedSource::new(path, source)))
+    }
+}
+
+impl SourceCode for KdlSource {
+    fn read_span<'a>(
+        &'a self,
+        span: &miette::SourceSpan,
+        context_lines_before: usize,
+        context_lines_after: usize
+    ) -> Result<Box<dyn miette::SpanContents<'a> + 'a>, miette::MietteError> {
+        self.0.read_span(span, context_lines_before, context_lines_after)
     }
 }

@@ -94,18 +94,6 @@ fn comment<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     .then(take_until(newline().or(end()))).ignored()
 }
 
-fn at_start<S: Span>(span: &S, chars: usize) -> S {
-    S::new(span.context(), span.start()..span.start()+chars)
-}
-
-fn at_end<S: Span>(span: &S) -> S {
-    S::new(span.context(), span.end()..span.end())
-}
-
-fn before_start<S: Span>(span: &S, chars: usize) -> S {
-    S::new(span.context(), span.start()-chars..span.start())
-}
-
 fn ml_comment<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
     recursive::<_, _, _, _, Error<S>>(|comment| {
         choice((
@@ -121,9 +109,9 @@ fn ml_comment<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
         {
             e.merge(Error::Unclosed {
                 label: "comment",
-                opened_at: at_start(&span, 2),
+                opened_at: span.at_start(2),
                 opened: "/*".into(),
-                expected_at: at_end(&span),
+                expected_at: span.at_end(),
                 expected: "*/".into(),
                 found: None.into(),
             })
@@ -143,15 +131,15 @@ fn raw_string<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
                 just('"')
                 .ignore_then(just('#').repeated().exactly(sharp_num)
                              .ignored()))
-            .map_err_with_span(move |e, span| {
+            .map_err_with_span(move |e: Error<S>, span| {
                 if matches!(&e, Error::Unexpected {
                     found: TokenFormat::Eoi, .. })
                 {
                     e.merge(Error::Unclosed {
                         label: "raw string",
-                        opened_at: before_start(&span, sharp_num+2),
+                        opened_at: span.before_start(sharp_num+2),
                         opened: TokenFormat::OpenRaw(sharp_num),
-                        expected_at: at_end(&span),
+                        expected_at: span.at_end(),
                         expected: TokenFormat::CloseRaw(sharp_num),
                         found: None.into(),
                     })
@@ -223,14 +211,14 @@ fn escaped_string<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
         .repeated()
         .then_ignore(just('"'))
         .map(|val| val.into_iter().collect::<String>().into())
-        .map_err_with_span(|e, span| {
+        .map_err_with_span(|e: Error<S>, span| {
             if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
             {
                 e.merge(Error::Unclosed {
                     label: "string",
-                    opened_at: before_start(&span, 1),
+                    opened_at: span.before_start(1),
                     opened: '"'.into(),
-                    expected_at: at_end(&span),
+                    expected_at: span.at_end(),
                     expected: '"'.into(),
                     found: None.into(),
                 })
@@ -491,7 +479,7 @@ fn line_space<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
 
 fn nodes<S: Span>() -> impl Parser<char, Vec<SpannedNode<S>>, Error=Error<S>> {
     use PropOrArg::*;
-    recursive(|nodes| {
+    recursive(|nodes: chumsky::recursive::Recursive<char, _, Error<S>>| {
         let braced_nodes = nodes
             .delimited_by(just('{'), just('}'))
             .map_err_with_span(|e, span| {
@@ -500,9 +488,9 @@ fn nodes<S: Span>() -> impl Parser<char, Vec<SpannedNode<S>>, Error=Error<S>> {
                     e.merge(Error::Unclosed {
                         label: "curly braces",
                         // we know it's `{` at the start of the span
-                        opened_at: at_start(&span, 1),
+                        opened_at: span.at_start(1),
                         opened: '{'.into(),
-                        expected_at: at_end(&span),
+                        expected_at: span.at_end(),
                         expected: '}'.into(),
                         found: None.into(),
                     })

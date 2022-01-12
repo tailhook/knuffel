@@ -1,8 +1,10 @@
 use std::fmt;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::ops::Range;
 
 use crate::traits;
+
+/// Reexport of [miette::SourceSpan] trait that we use for parsing
+pub use miette::SourceSpan as ErrorSpan;
 
 /// Keeps object's boundary positions in the original file
 #[derive(Clone, Debug)]
@@ -11,16 +13,22 @@ pub struct Spanned<T, S> {
     pub(crate) value: T,
 }
 
-/// Span used for single-file configs
+/// Normal byte offset span
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span(pub usize, pub usize);
 
-/// Span used for configs that are split across different files
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FileSpan(pub Arc<PathBuf>, pub Span);
+// TODO(tailhook) optimize eq to check only offset
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LinePos {
+    line: usize,
+    column: usize,
+    offset: usize,
+}
 
-impl traits::Span for Span {}
-impl traits::Span for FileSpan {}
+/// Span with line and column number
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineSpan(pub LinePos, pub LinePos);
+
 
 impl Span {
     pub fn length(&self) -> usize {
@@ -28,15 +36,15 @@ impl Span {
     }
 }
 
-impl Into<miette::SourceSpan> for Span {
-    fn into(self: Span) -> miette::SourceSpan {
-        (self.0, self.1 - self.0).into()
+impl Into<ErrorSpan> for Span {
+    fn into(self) -> ErrorSpan {
+        (self.0, self.1.saturating_sub(self.0)).into()
     }
 }
 
-impl Into<miette::SourceSpan> for FileSpan {
-    fn into(self: FileSpan) -> miette::SourceSpan {
-        self.1.into()
+impl Into<ErrorSpan> for LineSpan {
+    fn into(self) -> ErrorSpan {
+        (self.0.offset, self.1.offset.saturating_sub(self.0.offset)).into()
     }
 }
 
@@ -51,16 +59,83 @@ impl chumsky::Span for Span {
     fn end(&self) -> usize { self.1 }
 }
 
-impl chumsky::Span for FileSpan {
-    type Context = Arc<PathBuf>;
-    type Offset = usize;
-    fn new(context: Arc<PathBuf>, range: std::ops::Range<usize>) -> Self {
-        FileSpan(context, Span(range.start(), range.end()))
+impl traits::parsing_span::Sealed for Span {
+    fn at_start(&self, chars: usize) -> Self {
+        Span(self.0, self.0+chars)
     }
-    fn context(&self) -> Arc<PathBuf> { self.0.clone() }
-    fn start(&self) -> usize { (self.1).0 }
-    fn end(&self) -> usize { (self.1).1 }
+
+    fn at_end(&self) -> Self {
+        Span(self.1, self.1)
+    }
+
+    fn before_start(&self, chars: usize) -> Self {
+        Span(self.0.saturating_sub(chars), self.0)
+    }
+
+    fn length(&self) -> usize {
+        self.1.saturating_sub(self.0)
+    }
+
+    fn stream(text: &str) -> chumsky::Stream<'_, char, Self, std::iter::Map<std::str::CharIndices<'_>, fn((usize, char)) -> (char, Self)>>
+        where Self: chumsky::Span
+    {
+        chumsky::Stream::from_iter(
+            Span(text.len(), text.len()),
+            text.char_indices()
+                .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
+        )
+    }
 }
+
+impl traits::Span for Span {}
+
+
+impl chumsky::Span for LineSpan {
+    type Context = ();
+    type Offset = LinePos;
+    fn new(_context: (), range: std::ops::Range<LinePos>) -> Self {
+        LineSpan(range.start, range.end)
+    }
+    fn context(&self) -> () { () }
+    fn start(&self) -> LinePos { self.0 }
+    fn end(&self) -> LinePos { self.1 }
+}
+
+impl traits::parsing_span::Sealed for LineSpan {
+    /// Note assuming ascii, single-width, non-newline chars here
+    fn at_start(&self, chars: usize) -> Self {
+        LineSpan(self.0, LinePos {
+            offset: self.0.offset + chars,
+            column: self.0.column + chars,
+            .. self.0
+        })
+    }
+
+    fn at_end(&self) -> Self {
+        LineSpan(self.1, self.1)
+    }
+
+    /// Note assuming ascii, single-width, non-newline chars here
+    fn before_start(&self, chars: usize) -> Self {
+        LineSpan(LinePos {
+            offset: self.0.offset.saturating_sub(chars),
+            column: self.0.column.saturating_sub(chars),
+            .. self.0
+        }, self.0)
+    }
+
+    fn length(&self) -> usize {
+        self.1.offset.saturating_sub(self.0.offset)
+    }
+
+    fn stream(s: &str) -> chumsky::Stream<'_, char, Self, std::iter::Map<std::str::CharIndices<'_>, fn((usize, char)) -> (char, Self)>>
+        where Self: chumsky::Span
+    {
+        todo!();
+    }
+}
+
+impl traits::Span for LineSpan {}
 
 impl<T, S> Spanned<T, S> {
     pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Spanned<R, S> {
@@ -135,11 +210,8 @@ impl fmt::Display for Span {
     }
 }
 
-impl fmt::Display for FileSpan {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.display().fmt(f)?;
-        ":".fmt(f)?;
-        self.1.fmt(f)?;
-        Ok(())
+impl From<Range<usize>> for Span {
+    fn from(r: Range<usize>) -> Span {
+        Span(r.start, r.end)
     }
 }

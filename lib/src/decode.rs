@@ -1,14 +1,16 @@
-use std::fmt;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::default::Default;
-
-use miette::Diagnostic;
+use std::fmt;
 
 use crate::ast::{Literal, BuiltinType, Value};
 use crate::errors::{DecodeError, ExpectedType};
-use crate::traits::Span;
+use crate::traits::ErrorSpan;
 
-pub struct Context {
-    errors: Vec<Box<dyn Diagnostic + Send + Sync + 'static>>,
+
+pub struct Context<S: ErrorSpan> {
+    errors: Vec<DecodeError<S>>,
+    extensions: HashMap<TypeId, Box<dyn Any>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -20,7 +22,7 @@ pub enum Kind {
     Null,
 }
 
-pub fn bytes<S: Span>(value: &Value<S>, ctx: &mut Context) -> Vec<u8> {
+pub fn bytes<S: ErrorSpan>(value: &Value<S>, ctx: &mut Context<S>) -> Vec<u8> {
     if let Some(typ) = &value.type_name {
         match typ.as_builtin() {
             Some(&BuiltinType::Base64) => {
@@ -71,14 +73,28 @@ pub fn bytes<S: Span>(value: &Value<S>, ctx: &mut Context) -> Vec<u8> {
     }
 }
 
-impl Context {
-    pub(crate) fn new() -> Context {
+impl<S: ErrorSpan> Context<S> {
+    pub(crate) fn new() -> Context<S> {
         Context {
             errors: Vec::new(),
+            extensions: HashMap::new(),
         }
     }
-    pub fn emit_error<S: Span>(&mut self, err: impl Into<DecodeError<S>>) {
-        self.errors.push(Box::new(err.into()));
+    pub fn emit_error(&mut self, err: impl Into<DecodeError<S>>) {
+        self.errors.push(err.into());
+    }
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+    pub(crate) fn into_errors(self) -> Vec<DecodeError<S>> {
+        self.errors
+    }
+    pub fn set<T: 'static>(&mut self, value: T) {
+        self.extensions.insert(TypeId::of::<T>(), Box::new(value));
+    }
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.extensions.get(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_ref())
     }
 }
 

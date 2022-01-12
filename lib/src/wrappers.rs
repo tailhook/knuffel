@@ -1,50 +1,109 @@
 use chumsky::{Parser, Stream};
 
 use crate::ast::Document;
-use crate::errors::{Error, ParseError, AddSource};
+use crate::decode::Context;
+use crate::errors::{Error, AddSource, KdlSource, SyntaxErrors, DecodeErrors};
 use crate::grammar;
-use crate::span::Span;
+use crate::span::{Span};
+use crate::traits::{self, DecodeChildren};
 
 
-pub fn parse_ast(text: &str) -> Result<Document<Span>, Error> {
+pub fn parse_ast(file_name: &str, text: &str)
+    -> Result<Document<Span>, Error<Span>>
+{
     grammar::document()
-    .parse(Stream::from_iter(
+    .parse(
+        Stream::from_iter(
         Span(text.len(), text.len()),
         text.char_indices()
             .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
-    ))
+        )
+    )
     .map_err(|errors| {
-        let source: std::sync::Arc<String> = text.to_string().into();
-        let e = ParseError {
+        let source_code = KdlSource::new(file_name, text.to_string());
+        let e = SyntaxErrors {
             errors: errors.into_iter().map(|error| {
                 AddSource {
-                    source_code: source.clone(),
+                    source_code: source_code.clone(),
                     error,
                 }
             }).collect(),
         };
-        Error::Syntax(Box::new(e))
+        Error::Syntax(e)
     })
 }
 
-/*
-pub fn decode_ast<T, S>(ast: &Document<S>) -> Result<T, Error>
-    where T: DecodeChildren<S>,
-          S: crate::traits::Span,
+pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
+    where T: DecodeChildren<Span>,
 {
+    let ast = parse_ast(file_name, text)?;
     let mut ctx = Context::new();
-    match DecodeChildren::decode_children(ast, &mut ctx) {
-        Ok(v) if ctx.has_errors() {
-            Err(ctx.into_error())
+    let errors = match DecodeChildren::decode_children(&ast.nodes, &mut ctx) {
+        Ok(_) if ctx.has_errors() => {
+            ctx.into_errors()
         }
         Err(e) => {
             ctx.emit_error(e);
-            Err(ctx.into_error())
+            ctx.into_errors()
         }
-        Ok(v) => Ok(v)
-    }
+        Ok(v) => return Ok(v)
+    };
+    let source_code = KdlSource::new(file_name, text.to_string());
+    let e = DecodeErrors {
+        errors: errors.into_iter().map(|error| {
+            AddSource {
+                source_code: source_code.clone(),
+                error,
+            }
+        }).collect(),
+    };
+    Err(Error::Decode(e))
 }
-*/
+
+pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
+    -> Result<T, Error<S>>
+    where F: FnOnce(&mut Context<S>),
+          T: DecodeChildren<S>,
+          S: traits::Span,
+{
+    let mut ctx = Context::new();
+    set_ctx(&mut ctx);
+    let ast = grammar::document()
+        .parse(S::stream(text))
+        .map_err(|errors| {
+            let source_code = KdlSource::new(file_name, text.to_string());
+            let e = SyntaxErrors {
+                errors: errors.into_iter().map(|error| {
+                    AddSource {
+                        source_code: source_code.clone(),
+                        error,
+                    }
+                }).collect(),
+            };
+            Error::Syntax(e)
+        })?;
+
+    let errors = match DecodeChildren::decode_children(&ast.nodes, &mut ctx) {
+        Ok(_) if ctx.has_errors() => {
+            ctx.into_errors()
+        }
+        Err(e) => {
+            ctx.emit_error(e);
+            ctx.into_errors()
+        }
+        Ok(v) => return Ok(v)
+    };
+    let source_code = KdlSource::new(file_name, text.to_string());
+    let e = DecodeErrors {
+        errors: errors.into_iter().map(|error| {
+            AddSource {
+                source_code: source_code.clone(),
+                error,
+            }
+        }).collect(),
+    };
+    Err(Error::Decode(e))
+}
 
 #[test]
 fn normal() {
