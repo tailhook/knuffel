@@ -158,3 +158,18 @@ impl<S: ErrorSpan, T: Decode<S>> DecodeChildren<S> for Vec<T> {
         Ok(result)
     }
 }
+
+impl<S: ErrorSpan, T: DecodeScalar<S>> DecodeScalar<S> for Option<T> {
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                  ctx: &mut Context<S>) {
+        T::type_check(type_name, ctx)
+    }
+    fn raw_decode(value: &Spanned<Literal, S>, ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        match &**value {
+            Literal::Null => Ok(None),
+            _ => DecodeScalar::raw_decode(value, ctx).map(Some),
+        }
+    }
+}

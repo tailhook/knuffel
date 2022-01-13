@@ -99,6 +99,7 @@ pub struct Arg {
     pub kind: ArgKind,
     pub decode: DecodeMode,
     pub default: Option<Option<syn::Expr>>,
+    pub option: bool,
 }
 
 pub struct VarArgs {
@@ -333,6 +334,7 @@ impl StructBuilder {
                     kind: ArgKind::Value { option: is_option },
                     decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
                     default: attrs.default.clone(),
+                    option: is_option,
                 });
             }
             Some(FieldMode::Arguments) => {

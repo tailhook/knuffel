@@ -171,7 +171,8 @@ pub fn decode_enum_item(s: &Struct,
     })
 }
 
-fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode)
+fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode,
+                optional: bool)
     -> syn::Result<TokenStream>
 {
     match mode {
@@ -179,6 +180,37 @@ fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode)
             Ok(quote!{
                 ::knuffel::traits::DecodeScalar::decode(#val, #ctx)
             })
+        }
+        DecodeMode::Str if optional => {
+            Ok(quote![{
+                if let Some(typ) = &#val.type_name {
+                    #ctx.emit_error(::knuffel::errors::DecodeError::TypeName {
+                        span: typ.span().clone(),
+                        found: Some((**typ).clone()),
+                        expected: ::knuffel::errors::ExpectedType::no_type(),
+                        rust_type: "str", // TODO(tailhook) show field type
+                    });
+                }
+                match *#val.literal {
+                    ::knuffel::ast::Literal::String(ref s) => {
+                        ::std::str::FromStr::from_str(s).map_err(|e| {
+                            ::knuffel::errors::DecodeError::conversion(
+                                &#val.literal, e)
+                        })
+                        .map(Some)
+                    }
+                    ::knuffel::ast::Literal::Null => Ok(None),
+                    _ => {
+                        #ctx.emit_error(
+                            ::knuffel::errors::DecodeError::scalar_kind(
+                                ::knuffel::decode::Kind::String,
+                                &#val.literal,
+                            )
+                        );
+                        Ok(None)
+                    }
+                }
+            }])
         }
         DecodeMode::Str => {
             Ok(quote![{
@@ -204,6 +236,23 @@ fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode)
                 }
             }])
         }
+        DecodeMode::Bytes if optional => {
+            Ok(quote! {
+                if matches!(&*#val.literal, ::knuffel::ast::Literal::Null) {
+                    Ok(None)
+                } else {
+                    match ::knuffel::decode::bytes(#val, #ctx).try_into() {
+                        Ok(v) => Ok(Some(v)),
+                        Err(e) => {
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::conversion(
+                                    &#val.literal, e));
+                            Ok(None)
+                        }
+                    }
+                }
+            })
+        }
         DecodeMode::Bytes => {
             Ok(quote! {
                 ::knuffel::decode::bytes(#val, #ctx).try_into()
@@ -225,13 +274,14 @@ fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     for arg in &s.arguments {
         let fld = &arg.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
-        let decode_value = decode_value(&val, ctx, &arg.decode)?;
+        let decode_value = decode_value(&val, ctx, &arg.decode,
+                                        arg.option)?;
         match (&arg.default, &arg.kind) {
             (None, ArgKind::Value { option: true }) => {
                 decoder.push(quote! {
                     let #fld = #iter_args.next().map(|#val| {
                         #decode_value
-                    }).transpose()?;
+                    }).transpose()?.and_then(|v| v);
                 });
             }
             (None, ArgKind::Value { option: false }) => {
@@ -268,7 +318,7 @@ fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     if let Some(var_args) = &s.var_args {
         let fld = &var_args.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
-        let decode_value = decode_value(&val, ctx, &var_args.decode)?;
+        let decode_value = decode_value(&val, ctx, &var_args.decode, false)?;
         decoder.push(quote! {
             let #fld = #iter_args.map(|#val| {
                 #decode_value
@@ -300,6 +350,8 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     for prop in &s.properties {
         let fld = &prop.field.tmp_name;
         let prop_name = &prop.name;
+        let seen_name = syn::Ident::new(&format!("seen_{}", fld),
+                                        Span::mixed_site());
         if prop.flatten {
             declare_empty.push(quote! {
                 let mut #fld = ::std::default::Default::default();
@@ -310,13 +362,26 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
                 => {}
             });
         } else {
-            let decode_value = decode_value(&val, ctx, &prop.decode)?;
+            let decode_value = decode_value(&val, ctx, &prop.decode,
+                                            prop.option)?;
             declare_empty.push(quote! {
                 let mut #fld = None;
+                let mut #seen_name = false;
             });
-            match_branches.push(quote! {
-                #prop_name => #fld = Some(#decode_value?),
-            });
+            if prop.option {
+                match_branches.push(quote! {
+                    #prop_name => {
+                        #seen_name = true;
+                        #fld = #decode_value?;
+                    }
+                });
+            } else {
+                match_branches.push(quote! {
+                    #prop_name => {
+                        #fld = Some(#decode_value?);
+                    }
+                });
+            }
             let req_msg = format!("property `{}` is required", prop_name);
             if let Some(value) = &prop.default {
                 let default = if let Some(expr) = value {
@@ -324,9 +389,17 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
                 } else {
                     quote!(::std::default::Default::default())
                 };
-                postprocess.push(quote! {
-                    let #fld = #fld.unwrap_or_else(|| #default);
-                });
+                if prop.option {
+                    postprocess.push(quote! {
+                        if !#seen_name {
+                            #fld = #default;
+                        };
+                    });
+                } else {
+                    postprocess.push(quote! {
+                        let #fld = #fld.unwrap_or_else(|| #default);
+                    });
+                }
             } else if !prop.option {
                 postprocess.push(quote! {
                     let #fld = #fld.ok_or_else(|| {
@@ -339,7 +412,7 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     }
     if let Some(var_props) = &s.var_props {
         let fld = &var_props.field.tmp_name;
-        let decode_value = decode_value(&val, ctx, &var_props.decode)?;
+        let decode_value = decode_value(&val, ctx, &var_props.decode, false)?;
         declare_empty.push(quote! {
             let mut #fld = Vec::new();
         });
@@ -511,13 +584,23 @@ fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident,
                 => Ok(true),
             });
         } else {
-            let decode_value = decode_value(&value, ctx, &prop.decode)?;
-            match_branches.push(quote! {
-                #prop_name => {
-                    #dest = Some(#decode_value?);
-                    Ok(true)
-                }
-            });
+            let decode_value = decode_value(&value, ctx, &prop.decode,
+                                            prop.option)?;
+            if prop.option {
+                match_branches.push(quote! {
+                    #prop_name => {
+                        #dest = #decode_value?;
+                        Ok(true)
+                    }
+                });
+            } else {
+                match_branches.push(quote! {
+                    #prop_name => {
+                        #dest = Some(#decode_value?);
+                        Ok(true)
+                    }
+                });
+            }
         }
     }
     Ok(quote! {
