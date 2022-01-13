@@ -6,7 +6,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use miette::{Diagnostic, NamedSource, SourceCode};
 
-use crate::ast::{TypeName, Literal};
+use crate::ast::{TypeName, Literal, SpannedNode};
 use crate::span::{Spanned};
 use crate::decode::Kind;
 use crate::traits::{ErrorSpan, Span};
@@ -22,7 +22,7 @@ pub(crate) struct AddSource<E: Diagnostic + Send + Sync + 'static> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct KdlSource(Arc<NamedSource>);
+pub(crate) struct KdlSource(pub(crate) Arc<NamedSource>);
 
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
@@ -54,6 +54,27 @@ pub enum DecodeError<S: ErrorSpan> {
         span: S,
         expected: ExpectedKind,
         found: Kind,
+    },
+    #[diagnostic()]
+    #[error("{}", message)]
+    Missing {
+        #[label("node starts here")]
+        span: S,
+        message: String,
+    },
+    // Only for errors on global level
+    #[diagnostic()]
+    #[error("{}", message)]
+    MissingNode {
+        message: String,
+    },
+    #[diagnostic()]
+    #[error("{}", message)]
+    Unexpected {
+        #[label("unexpected {}", kind)]
+        span: S,
+        kind: &'static str,
+        message: String,
     },
     #[error("{}", source)]
     #[diagnostic()]
@@ -345,6 +366,22 @@ impl<S: ErrorSpan> DecodeError<S> {
             found: (&found.value).into(),
         }
     }
+    pub fn missing(node: &SpannedNode<S>, message: impl Into<String>) -> Self {
+        DecodeError::Missing {
+            span: node.node_name.span().clone(),
+            message: message.into(),
+        }
+    }
+    pub fn unexpected<T>(elem: &Spanned<T, S>, kind: &'static str,
+                         message: impl Into<String>)
+        -> Self
+    {
+        DecodeError::Unexpected {
+            span: elem.span().clone(),
+            kind,
+            message: message.into(),
+        }
+    }
     pub fn unsupported<T, M>(span: &Spanned<T, S>, message: M)-> Self
         where M: Into<Cow<'static, str>>,
     {
@@ -364,6 +401,12 @@ impl<S: ErrorSpan> DecodeError<S> {
             => TypeName { span: f(span), found, expected, rust_type },
             ScalarKind { span, expected, found }
             => ScalarKind { span: f(span), expected, found },
+            Missing { span, message }
+            => Missing { span: f(span), message},
+            MissingNode { message }
+            => MissingNode { message },
+            Unexpected { span, kind, message }
+            => Unexpected { span: f(span), kind, message},
             Conversion { span, source }
             => Conversion { span: f(span), source },
             Unsupported { span, message }
@@ -410,11 +453,17 @@ impl fmt::Display for ExpectedType {
             if let Some(first) = iter.next() {
                 write!(f, "{}", first)?;
             }
-            let last = iter.next_back();
+            let last = if self.no_type {
+                None
+            } else {
+                iter.next_back()
+            };
             for item in iter {
                 write!(f, ", {}", item)?;
             }
-            if let Some(last) = last {
+            if self.no_type {
+                write!(f, " or no type")?;
+            } else if let Some(last) = last {
                 write!(f, " or {}", last)?;
             }
             Ok(())

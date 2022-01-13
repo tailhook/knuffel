@@ -101,15 +101,15 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
                 for #e_name {
             fn raw_decode(val: &::knuffel::span::Spanned<
                           ::knuffel::ast::Literal, S>,
-                          ctx: &mut ::knuffel::decode::Context)
-                -> Result<#e_name, ::knuffel::DecodeError<S>>
+                          ctx: &mut ::knuffel::decode::Context<S>)
+                -> Result<#e_name, ::knuffel::errors::DecodeError<S>>
             {
                 match &**val {
                     ::knuffel::ast::Literal::String(ref s) => {
                         match &s[..] {
                             #(#match_branches,)*
                             _ => {
-                                Err(::knuffel::errors::DecodeError::convert(
+                                Err(::knuffel::errors::DecodeError::conversion(
                                         val, #value_err))
                             }
                         }
@@ -117,21 +117,21 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
                     _ => {
                         Err(::knuffel::errors::DecodeError::scalar_kind(
                             ::knuffel::decode::Kind::String,
-                            &val.literal
+                            &val,
                         ))
                     }
                 }
             }
             fn type_check(type_name: &Option<::knuffel::span::Spanned<
-                          ::knuffel::ast::TypeName, S>>
-                          ctx: &mut ::knuffel::decode::Context)
+                          ::knuffel::ast::TypeName, S>>,
+                          ctx: &mut ::knuffel::decode::Context<S>)
             {
                 if let Some(typ) = type_name {
                     ctx.emit_error(::knuffel::errors::DecodeError::TypeName {
-                        span: type_name.span(),
-                        found: Some(type_name.clone()),
-                        expected: ExpectedType::no_type(),
-                        rust_type: #e_name,
+                        span: typ.span().clone(),
+                        found: Some((**typ).clone()),
+                        expected: ::knuffel::errors::ExpectedType::no_type(),
+                        rust_type: stringify!(#e_name),
                     });
                 }
             }

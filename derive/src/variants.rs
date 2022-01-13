@@ -8,11 +8,13 @@ use crate::node;
 pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     let name = &e.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
-    let decode = decode(e, &node)?;
+    let ctx = syn::Ident::new("ctx", Span::mixed_site());
+    let decode = decode(e, &node, &ctx)?;
     Ok(quote! {
         impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
-                -> Result<Self, ::knuffel::Error<S>>
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
+                           #ctx: &mut ::knuffel::decode::Context<S>)
+                -> Result<Self, ::knuffel::errors::DecodeError<S>>
             {
                 #decode
             }
@@ -20,7 +22,7 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     })
 }
 
-fn decode(e: &Enum, node: &syn::Ident)
+fn decode(e: &Enum, node: &syn::Ident, ctx: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let mut branches = Vec::with_capacity(e.variants.len());
@@ -33,20 +35,26 @@ fn decode(e: &Enum, node: &syn::Ident)
                 branches.push(quote! {
                     #name => {
                         for arg in &#node.arguments {
-                            return Err(::knuffel::Error::new(
-                                arg.literal.span(), "unexpected argument"));
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                    &arg.literal, "argument",
+                                    "unexpected argument"));
                         }
                         for (name, _) in &#node.properties {
-                            return Err(::knuffel::Error::new(name.span(),
-                                format!("unexpected property `{}`",
-                                        name.escape_default())));
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                    name, "property",
+                                    format!("unexpected property `{}`",
+                                            name.escape_default())));
                         }
                         if let Some(children) = &#node.children {
                             for child in children.iter() {
-                                return Err(::knuffel::Error::new(child.span(),
-                                    format!("unexpected node `{}`",
-                                        child.node_name.escape_default())
-                                ));
+                                #ctx.emit_error(
+                                    ::knuffel::errors::DecodeError::unexpected(
+                                        child, "node",
+                                        format!("unexpected node `{}`",
+                                            child.node_name.escape_default())
+                                    ));
                             }
                         }
                         Ok(#enum_name::#variant_name)
@@ -55,7 +63,7 @@ fn decode(e: &Enum, node: &syn::Ident)
             }
             VariantKind::Nested { option: false } => {
                 branches.push(quote! {
-                    #name => ::knuffel::Decode::decode_node(#node)
+                    #name => ::knuffel::Decode::decode_node(#node, #ctx)
                         .map(#enum_name::#variant_name),
                 });
             }
@@ -66,7 +74,7 @@ fn decode(e: &Enum, node: &syn::Ident)
                             #node.properties.len() > 0 ||
                             #node.children.is_some()
                         {
-                            ::knuffel::Decode::decode_node(#node)
+                            ::knuffel::Decode::decode_node(#node, #ctx)
                                 .map(Some)
                                 .map(#enum_name::#variant_name)
                         } else {
@@ -78,7 +86,7 @@ fn decode(e: &Enum, node: &syn::Ident)
             VariantKind::Tuple(s) => {
                 let decode = node::decode_enum_item(s,
                     quote!(#enum_name::#variant_name),
-                    node, false)?;
+                    node, ctx, false)?;
                 branches.push(quote! {
                     #name => { #decode }
                 });
@@ -103,7 +111,8 @@ fn decode(e: &Enum, node: &syn::Ident)
         match &**#node.node_name {
             #(#branches)*
             name_str => {
-                Err(::knuffel::Error::new(#node.node_name.span(), #err))
+                Err(::knuffel::errors::DecodeError::conversion(
+                        &#node.node_name, #err))
             }
         }
     })

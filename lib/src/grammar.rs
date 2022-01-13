@@ -562,11 +562,13 @@ pub(crate) fn document<S: Span>()
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
     use chumsky::prelude::*;
-    use chumsky::Stream;
-    use crate::errors::{ParseError, ParseErrorEnum, AddSource};
+    use miette::NamedSource;
+    use crate::errors::{SyntaxErrors, ParseErrorEnum, AddSource, KdlSource};
     use crate::span::Span;
     use crate::ast::{Literal, TypeName, Radix, Decimal, Integer};
+    use crate::traits::sealed::Sealed;
     use super::{ws, comment, ml_comment, string, ident, literal, type_name};
     use super::{nodes, number};
 
@@ -586,13 +588,12 @@ mod test {
         where P: Parser<char, T, Error=ParseErrorEnum<Span>>
     {
         p.then_ignore(end())
-        .parse(Stream::from_iter(
-                Span(text.len(), text.len()),
-                text.char_indices()
-                    .map(|(i, c)| (c, Span(i, i + c.len_utf8()))),
-        )).map_err(|errors| {
+        .parse(Span::stream(text)).map_err(|errors| {
             let source: std::sync::Arc<String> = (text.to_string() + " ").into();
-            let e = ParseError {
+            let source = KdlSource(Arc::new(
+                NamedSource::new("<test>", source)
+            ));
+            let e = SyntaxErrors {
                 errors: errors.into_iter().map(|error| {
                     AddSource {
                         source_code: source.clone(),
@@ -634,13 +635,13 @@ mod test {
     #[test]
     fn parse_comment_err() {
         err_eq!(parse(ws(), r#"/* comment"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed comment `/*`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -651,13 +652,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* com/*ment *"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed comment `/*`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -668,13 +669,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* com/*me*/nt *"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed comment `/*`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -685,13 +686,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* comment *"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed comment `/*`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -702,13 +703,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/*/"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed comment `/*`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -720,13 +721,13 @@ mod test {
         }"#);
         // nothing is expected for comment or whitespace
         err_eq!(parse(ws(), r#"xxx"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found `x`, expected whitespace",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected token",
                     "span": {"offset": 0, "length": 1}}
@@ -758,13 +759,13 @@ mod test {
     #[test]
     fn parse_str_err() {
         err_eq!(parse(string(), r#""hello"#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed string `\"`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 1}},
@@ -775,13 +776,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{FFFFFF}llo""#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "converted integer out of range for `char`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "invalid character code",
                     "span": {"offset": 5, "length": 8}}
@@ -790,13 +791,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{1234567}llo""#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found `7`, expected `}`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected token",
                     "span": {"offset": 12, "length": 1}}
@@ -805,13 +806,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{1gh}llo""#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found `g`, expected `}` or hexadecimal digit",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected token",
                     "span": {"offset": 7, "length": 1}}
@@ -820,14 +821,14 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\x01llo""#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message":
                     "found `x`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "invalid escape char",
                     "span": {"offset": 4, "length": 1}}
@@ -837,13 +838,13 @@ mod test {
         }"#);
         // Tests error recovery
         err_eq!(parse(string(), r#""he\u{FFFFFF}l\!lo""#), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "converted integer out of range for `char`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "invalid character code",
                     "span": {"offset": 5, "length": 8}}
@@ -853,7 +854,7 @@ mod test {
                 "message":
                     "found `!`, expected `\"`, `/`, `\\`, `b`, `f`, `n`, `r`, `t` or `u`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "invalid escape char",
                     "span": {"offset": 15, "length": 1}}
@@ -865,13 +866,13 @@ mod test {
     #[test]
     fn parse_raw_str_err() {
         err_eq!(parse(string(), r#"r"hello"#),  r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed raw string `r\"`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 2}},
@@ -882,13 +883,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r###"r#"hello""###), r###"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed raw string `r#\"`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 3}},
@@ -899,13 +900,13 @@ mod test {
             }]
         }"###);
         err_eq!(parse(string(), r####"r###"hello"####), r####"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed raw string `r###\"`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 5}},
@@ -916,13 +917,13 @@ mod test {
             }]
         }"####);
         err_eq!(parse(string(), r####"r###"hello"#world"####), r####"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed raw string `r###\"`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 0, "length": 5}},
@@ -969,14 +970,14 @@ mod test {
         parse(nodes(), "item true").unwrap();
 
         err_eq!(parse(nodes(), "true \"item\""), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message":
                     "found `true`, expected identifier",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "keyword",
                     "span": {"offset": 0, "length": 4}}
@@ -986,14 +987,14 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "item false=true"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message":
                     "found keyword, expected identifier or string",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected keyword",
                     "span": {"offset": 5, "length": 5}}
@@ -1003,13 +1004,13 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "item 2=2"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "numbers cannot be used as property names",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected number",
                     "span": {"offset": 5, "length": 1}}
@@ -1034,13 +1035,13 @@ mod test {
     #[test]
     fn parse_type_err() {
         err_eq!(parse(type_name(), "(123)"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found number, expected identifier",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected number",
                     "span": {"offset": 1, "length": 3}}
@@ -1050,13 +1051,13 @@ mod test {
         }"#);
 
         err_eq!(parse(type_name(), "(-1)"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found number, expected identifier",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected number",
                     "span": {"offset": 1, "length": 2}}
@@ -1210,13 +1211,13 @@ mod test {
     #[test]
     fn parse_node_err() {
         err_eq!(parse(nodes(), "hello{"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "unclosed curly braces `{`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 5, "length": 1}},
@@ -1227,13 +1228,13 @@ mod test {
             }]
         }"#);
         err_eq!(parse(nodes(), "hello world"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "identifiers cannot be used as arguments",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected identifier",
                     "span": {"offset": 6, "length": 5}}
@@ -1244,13 +1245,13 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "hello world {"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "identifiers cannot be used as arguments",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected identifier",
                     "span": {"offset": 6, "length": 5}}
@@ -1260,7 +1261,7 @@ mod test {
             }, {
                 "message": "unclosed curly braces `{`",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "opened here",
                     "span": {"offset": 12, "length": 1}},
@@ -1272,13 +1273,13 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "1 + 2"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found number, expected identifier",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected number",
                     "span": {"offset": 0, "length": 1}}
@@ -1288,13 +1289,13 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "-1 +2"), r#"{
-            "message": "error parsing KDL text",
+            "message": "KDL syntax error",
             "severity": "error",
             "labels": [],
             "related": [{
                 "message": "found number, expected identifier",
                 "severity": "error",
-                "filename": "",
+                "filename": "<test>",
                 "labels": [
                     {"label": "unexpected number",
                     "span": {"offset": 0, "length": 2}}

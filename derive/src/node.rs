@@ -13,10 +13,11 @@ fn child_can_partial(child: &Child) -> bool {
 pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
+    let ctx = syn::Ident::new("ctx", Span::mixed_site());
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(s, &node)?;
-    let decode_props = decode_props(s, &node)?;
-    let decode_children_normal = decode_children(s, &children,
+    let decode_args = decode_args(s, &node, &ctx)?;
+    let decode_props = decode_props(s, &node, &ctx)?;
+    let decode_children_normal = decode_children(s, &children, &ctx,
                                           Some(quote!(#node.span())))?;
     let assign_extra = assign_extra(s)?;
 
@@ -48,22 +49,24 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         let node = syn::Ident::new("node", Span::mixed_site());
         let name = syn::Ident::new("name", Span::mixed_site());
         let value = syn::Ident::new("value", Span::mixed_site());
-        let insert_child = insert_child(s, &node)?;
-        let insert_property = insert_property(s, &name, &value)?;
+        let insert_child = insert_child(s, &node, &ctx)?;
+        let insert_property = insert_property(s, &name, &value, &ctx)?;
         extra_traits.push(quote! {
             impl<S> ::knuffel::traits::DecodePartial<S> for #s_name
                 where S: ::knuffel::traits::Span,
             {
                 fn insert_child(&mut self,
-                    #node: &::knuffel::ast::SpannedNode<S>)
-                    -> Result<bool, ::knuffel::Error<S>>
+                    #node: &::knuffel::ast::SpannedNode<S>,
+                    #ctx: &mut ::knuffel::decode::Context<S>)
+                    -> Result<bool, ::knuffel::errors::DecodeError<S>>
                 {
                     #insert_child
                 }
                 fn insert_property(&mut self,
                     #name: &::knuffel::span::Spanned<Box<str>, S>,
-                    #value: &::knuffel::ast::Value<S>)
-                    -> Result<bool, ::knuffel::Error<S>>
+                    #value: &::knuffel::ast::Value<S>,
+                    #ctx: &mut ::knuffel::decode::Context<S>)
+                    -> Result<bool, ::knuffel::errors::DecodeError<S>>
                 {
                     #insert_property
                 }
@@ -71,13 +74,15 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         });
     }
     if !s.has_arguments && !s.has_properties {
-        let decode_children = decode_children(s, &children, None)?;
+        let decode_children = decode_children(s, &children, &ctx, None)?;
         extra_traits.push(quote! {
             impl<S> ::knuffel::traits::DecodeChildren<S> for #s_name
                 where S: ::knuffel::traits::Span,
             {
-                fn decode_children(#children: &[::knuffel::ast::SpannedNode<S>])
-                    -> Result<Self, ::knuffel::Error<S>>
+                fn decode_children(
+                    #children: &[::knuffel::ast::SpannedNode<S>],
+                    #ctx: &mut ::knuffel::decode::Context<S>)
+                    -> Result<Self, ::knuffel::errors::DecodeError<S>>
                 {
                     #decode_children
                     #assign_extra
@@ -89,8 +94,9 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     Ok(quote! {
         #(#extra_traits)*
         impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #s_name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
-                -> Result<Self, ::knuffel::Error<S>>
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
+                           #ctx: &mut ::knuffel::decode::Context<S>)
+                -> Result<Self, ::knuffel::errors::DecodeError<S>>
             {
                 #decode_args
                 #decode_props
@@ -106,16 +112,18 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
 pub fn emit_new_type(s: &NewType) -> syn::Result<TokenStream> {
     let s_name = &s.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
+    let ctx = syn::Ident::new("ctx", Span::mixed_site());
     Ok(quote! {
         impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #s_name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>)
-                -> Result<Self, ::knuffel::Error<S>>
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
+                           #ctx: &mut ::knuffel::decode::Context<S>)
+                -> Result<Self, ::knuffel::errors::DecodeError<S>>
             {
                 if #node.arguments.len() > 0 ||
                     #node.properties.len() > 0 ||
                     #node.children.is_some()
                 {
-                    ::knuffel::Decode::decode_node(#node)
+                    ::knuffel::Decode::decode_node(#node, #ctx)
                         .map(Some)
                         .map(#s_name)
                 } else {
@@ -127,13 +135,13 @@ pub fn emit_new_type(s: &NewType) -> syn::Result<TokenStream> {
 }
 
 pub fn decode_enum_item(s: &Struct,
-    s_name: impl ToTokens, node: &syn::Ident, named: bool)
+    s_name: impl ToTokens, node: &syn::Ident, ctx: &syn::Ident, named: bool)
     -> syn::Result<TokenStream>
 {
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(s, &node)?;
-    let decode_props = decode_props(s, &node)?;
-    let decode_children = decode_children(s, &children,
+    let decode_args = decode_args(s, node, ctx)?;
+    let decode_props = decode_props(s, node, ctx)?;
+    let decode_children = decode_children(s, &children, ctx,
                                           Some(quote!(#node.span())))?;
     let assign_extra = assign_extra(s)?;
     let all_fields = s.all_fields();
@@ -163,42 +171,52 @@ pub fn decode_enum_item(s: &Struct,
     })
 }
 
-fn decode_value(val: &syn::Ident, mode: &DecodeMode)
+fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode)
     -> syn::Result<TokenStream>
 {
     match mode {
         DecodeMode::Normal => {
             Ok(quote!{
-                ::knuffel::traits::DecodeScalar::decode(#val)
+                ::knuffel::traits::DecodeScalar::decode(#val, #ctx)
             })
         }
         DecodeMode::Str => {
-            Ok(quote! {
+            Ok(quote![{
                 if let Some(typ) = &#val.type_name {
-                    Err(::knuffel::Error::new(typ.span(),
-                        format!("no type name expected")))
-                } else {
-                    match *#val.literal {
-                        ::knuffel::ast::Literal::String(ref s) => {
-                            ::std::str::FromStr::from_str(s)
-                                .map_err(|e| ::knuffel::Error::from_err(
-                                    #val.literal.span(), e))
-                        }
-                        _ => Err(::knuffel::Error::new(#val.literal.span(),
-                                            "expected string value")),
-                    }
+                    #ctx.emit_error(::knuffel::errors::DecodeError::TypeName {
+                        span: typ.span().clone(),
+                        found: Some((**typ).clone()),
+                        expected: ::knuffel::errors::ExpectedType::no_type(),
+                        rust_type: "str", // TODO(tailhook) show field type
+                    });
                 }
-            })
+                match *#val.literal {
+                    ::knuffel::ast::Literal::String(ref s) => {
+                        ::std::str::FromStr::from_str(s).map_err(|e| {
+                            ::knuffel::errors::DecodeError::conversion(
+                                &#val.literal, e)
+                        })
+                    }
+                    _ => Err(::knuffel::errors::DecodeError::scalar_kind(
+                        ::knuffel::decode::Kind::String,
+                        &#val.literal,
+                    )),
+                }
+            }])
         }
         DecodeMode::Bytes => {
             Ok(quote! {
-                ::knuffel::decode::bytes(#val).map(Into::into)
+                ::knuffel::decode::bytes(#val, #ctx).try_into()
+                .map_err(|e| ::knuffel::errors::DecodeError::conversion(
+                        &#val.literal, e))
             })
         }
     }
 }
 
-fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
+fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
+    -> syn::Result<TokenStream>
+{
     let mut decoder = Vec::new();
     let iter_args = syn::Ident::new("iter_args", Span::mixed_site());
     decoder.push(quote! {
@@ -207,7 +225,7 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     for arg in &s.arguments {
         let fld = &arg.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
-        let decode_value = decode_value(&val, &arg.decode)?;
+        let decode_value = decode_value(&val, ctx, &arg.decode)?;
         match (&arg.default, &arg.kind) {
             (None, ArgKind::Value { option: true }) => {
                 decoder.push(quote! {
@@ -225,8 +243,8 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
                 decoder.push(quote! {
                     let #val =
                         #iter_args.next().ok_or_else(|| {
-                            ::knuffel::Error::new(
-                                #node.node_name.span(), #error)
+                            ::knuffel::errors::DecodeError::missing(
+                                #node, #error)
                         })?;
                     let #fld = #decode_value?;
                 });
@@ -250,7 +268,7 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     if let Some(var_args) = &s.var_args {
         let fld = &var_args.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
-        let decode_value = decode_value(&val, &var_args.decode)?;
+        let decode_value = decode_value(&val, ctx, &var_args.decode)?;
         decoder.push(quote! {
             let #fld = #iter_args.map(|#val| {
                 #decode_value
@@ -259,15 +277,18 @@ fn decode_args(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     } else {
         decoder.push(quote! {
             if let Some(val) = #iter_args.next() {
-                return Err(::knuffel::Error::new(val.literal.span(),
-                                                 "unexpected argument"));
+                return Err(::knuffel::errors::DecodeError::unexpected(
+                        &val.literal, "argument",
+                        "unexpected argument"));
             }
         });
     }
     Ok(quote! { #(#decoder)* })
 }
 
-fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
+fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
+    -> syn::Result<TokenStream>
+{
     let mut declare_empty = Vec::new();
     let mut match_branches = Vec::new();
     let mut postprocess = Vec::new();
@@ -285,11 +306,11 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             });
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial::
-                    insert_property(&mut #fld, #name, #val)?
+                    insert_property(&mut #fld, #name, #val, #ctx)?
                 => {}
             });
         } else {
-            let decode_value = decode_value(&val, &prop.decode)?;
+            let decode_value = decode_value(&val, ctx, &prop.decode)?;
             declare_empty.push(quote! {
                 let mut #fld = None;
             });
@@ -309,7 +330,8 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
             } else if !prop.option {
                 postprocess.push(quote! {
                     let #fld = #fld.ok_or_else(|| {
-                        ::knuffel::Error::new(#node.node_name.span(), #req_msg)
+                        ::knuffel::errors::DecodeError::missing(
+                            #node, #req_msg)
                     })?;
                 });
             }
@@ -317,14 +339,16 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     }
     if let Some(var_props) = &s.var_props {
         let fld = &var_props.field.tmp_name;
-        let decode_value = decode_value(&val, &var_props.decode)?;
+        let decode_value = decode_value(&val, ctx, &var_props.decode)?;
         declare_empty.push(quote! {
             let mut #fld = Vec::new();
         });
         match_branches.push(quote! {
             #name_str => {
                 let converted_name = #name_str.parse()
-                    .map_err(|e| ::knuffel::Error::from_err(#name.span(), e))?;
+                    .map_err(|e| {
+                        ::knuffel::errors::DecodeError::conversion(#name, e)
+                    })?;
                 #fld.push((
                     converted_name,
                     #decode_value?,
@@ -337,7 +361,8 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     } else {
         match_branches.push(quote! {
             #name_str => {
-                return Err(::knuffel::Error::new(#name.span(),
+                return Err(::knuffel::errors::DecodeError::unexpected(
+                    #name, "property",
                     format!("unexpected property `{}`",
                             #name_str.escape_default())));
             }
@@ -354,7 +379,8 @@ fn decode_props(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     })
 }
 
-fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
+fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs,
+             ctx: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let mut bld = StructBuilder::new(
@@ -365,12 +391,14 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
 
     let node = syn::Ident::new("node", Span::mixed_site());
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(&s, &node)?;
-    let decode_props = decode_props(&s, &node)?;
-    let decode_children = decode_children(&s, &children,
+    let decode_args = decode_args(&s, &node, ctx)?;
+    let decode_props = decode_props(&s, &node, ctx)?;
+    let decode_children = decode_children(&s, &children, ctx,
                                           Some(quote!(#node.span())))?;
     Ok(quote! {
-        let #func = |#node: &::knuffel::ast::SpannedNode<S>| {
+        let mut #func = |#node: &::knuffel::ast::SpannedNode<S>,
+                         #ctx: &mut ::knuffel::decode::Context<S>|
+        {
             #decode_args
             #decode_props
             let #children = #node.children.as_ref()
@@ -382,7 +410,8 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
     })
 }
 
-fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
+fn decode_node(child_def: &Child, in_partial: bool,
+               child: &syn::Ident, ctx: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let fld = &child_def.field.tmp_name;
@@ -394,7 +423,7 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
     let (init, func) = if let ChildMode::Unwrap(inner) = &child_def.mode {
         let func = syn::Ident::new(&format!("unwrap_{}", fld),
                                    Span::mixed_site());
-        let unwrap_fn = unwrap_fn(&func, fld, inner)?;
+        let unwrap_fn = unwrap_fn(&func, fld, inner, ctx)?;
         (unwrap_fn, quote!(#func))
     } else {
         (quote!(), quote!(::knuffel::Decode::decode_node))
@@ -409,7 +438,7 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
         Ok(quote! {
             {
                 #init
-                let #value = #func(#child)?;
+                let #value = #func(#child, #ctx)?;
                 #assign;
                 Ok(true)
             }
@@ -418,7 +447,7 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
         Ok(quote! {
             {
                 #init
-                match #func(#child) {
+                match #func(#child, #ctx) {
                     Ok(#value) => {
                         #assign;
                         None
@@ -430,7 +459,9 @@ fn decode_node(child_def: &Child, in_partial: bool, child: &syn::Ident)
     }
 }
 
-fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
+fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
+    -> syn::Result<TokenStream>
+{
     let mut match_branches = Vec::with_capacity(s.children.len());
     for child_def in &s.children {
         let dest = &child_def.field.from_self();
@@ -438,18 +469,18 @@ fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
         if matches!(child_def.mode, ChildMode::Flatten) {
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial
-                    ::insert_child(&mut #dest, #node)?
+                    ::insert_child(&mut #dest, #node, #ctx)?
                 => Ok(true),
             })
         } else {
             let dup_err = format!("duplicate node `{}`, single node expected",
                                   child_name.escape_default());
-            let decode = decode_node(&child_def, true, node)?;
+            let decode = decode_node(&child_def, true, node, ctx)?;
             match_branches.push(quote! {
                 #child_name => {
                     if #dest.is_some() {
-                        Err(::knuffel::Error::new(
-                            #node.node_name.span(), #dup_err))
+                        Err(::knuffel::errors::DecodeError::unexpected(
+                            &#node.node_name, "node", #dup_err))
                     } else {
                         #decode
                     }
@@ -465,7 +496,8 @@ fn insert_child(s: &Struct, node: &syn::Ident) -> syn::Result<TokenStream> {
     })
 }
 
-fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident)
+fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident,
+                   ctx: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let mut match_branches = Vec::with_capacity(s.children.len());
@@ -475,11 +507,11 @@ fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident)
         if prop.flatten {
             match_branches.push(quote! {
                 _ if ::knuffel::traits::DecodePartial
-                    ::insert_property(&mut #dest, #name, #value)?
+                    ::insert_property(&mut #dest, #name, #value, #ctx)?
                 => Ok(true),
             });
         } else {
-            let decode_value = decode_value(&value, &prop.decode)?;
+            let decode_value = decode_value(&value, ctx, &prop.decode)?;
             match_branches.push(quote! {
                 #prop_name => {
                     #dest = Some(#decode_value?);
@@ -496,7 +528,7 @@ fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident)
     })
 }
 
-fn decode_children(s: &Struct, children: &syn::Ident,
+fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
                    err_span: Option<TokenStream>)
     -> syn::Result<TokenStream>
 {
@@ -517,7 +549,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 match_branches.push(quote! {
                     _ if (
                         match ::knuffel::traits::DecodePartial
-                            ::insert_child(&mut #fld, #child)
+                            ::insert_child(&mut #fld, #child, #ctx)
                         {
                             Ok(true) => return None,
                             Ok(false) => false,
@@ -530,7 +562,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 declare_empty.push(quote! {
                     let mut #fld = Vec::new();
                 });
-                let decode = decode_node(&child_def, false, &child)?;
+                let decode = decode_node(&child_def, false, &child, ctx)?;
                 match_branches.push(quote! {
                     #child_name => #decode,
                 });
@@ -578,12 +610,13 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 let dup_err = format!(
                     "duplicate node `{}`, single node expected",
                     child_name.escape_default());
-                let decode = decode_node(&child_def, false, &child)?;
+                let decode = decode_node(&child_def, false, &child, ctx)?;
                 match_branches.push(quote! {
                     #child_name => {
                         if #fld.is_some() {
-                            Some(Err(::knuffel::Error::new(
-                                #child.node_name.span(), #dup_err)))
+                            Some(Err(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                &#child.node_name, "node", #dup_err)))
                         } else {
                             #decode
                         }
@@ -604,13 +637,18 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                     if let Some(span) = &err_span {
                         postprocess.push(quote! {
                             let #fld = #fld.ok_or_else(|| {
-                                ::knuffel::Error::new(#span, #req_msg)
+                                ::knuffel::errors::DecodeError::Missing {
+                                    span: #span.clone(),
+                                    message: #req_msg.into(),
+                                }
                             })?;
                         });
                     } else {
                         postprocess.push(quote! {
                             let #fld = #fld.ok_or_else(|| {
-                                ::knuffel::Error::new_global(#req_msg)
+                                ::knuffel::errors::DecodeError::MissingNode {
+                                    message: #req_msg.into(),
+                                }
                             })?;
                         });
                     }
@@ -626,30 +664,36 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 match_branches.push(quote! {
                     #child_name => {
                         for arg in &#child.arguments {
-                            return Some(Err(::knuffel::Error::new(
-                                arg.literal.span(), "unexpected argument")));
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                    &arg.literal, "argument",
+                                    "unexpected argument"));
                         }
                         for (name, _) in &#child.properties {
-                            return Some(Err(::knuffel::Error::new(name.span(),
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                name, "property",
                                 format!("unexpected property `{}`",
-                                        name.escape_default()))));
+                                        name.escape_default())));
                         }
                         if let Some(children) = &#child.children {
                             for child in children.iter() {
-                                return Some(
-                                    Err(::knuffel::Error::new(child.span(),
+                                #ctx.emit_error(
+                                    ::knuffel::errors::DecodeError::unexpected(
+                                        child, "node",
                                         format!("unexpected node `{}`",
                                             child.node_name.escape_default())
-                                    )));
+                                    ));
                             }
                         }
                         if #fld {
-                            Some(Err(::knuffel::Error::new(
-                                #child.node_name.span(), #dup_err)))
+                            #ctx.emit_error(
+                                ::knuffel::errors::DecodeError::unexpected(
+                                    &#child.node_name, "node", #dup_err));
                         } else {
                             #fld = true;
-                            None
                         }
+                        None
                     }
                 });
             }
@@ -659,7 +703,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
         let fld = &var_children.field.tmp_name;
         match_branches.push(quote! {
             _ => {
-                match ::knuffel::Decode::decode_node(#child) {
+                match ::knuffel::Decode::decode_node(#child, #ctx) {
                     Ok(#child) => Some(Ok(#child)),
                     Err(e) => Some(Err(e)),
                 }
@@ -671,15 +715,17 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 match &**#child.node_name {
                     #(#match_branches)*
                 }
-            }).collect::<Result<_, ::knuffel::Error<_>>>()?;
+            }).collect::<Result<_, ::knuffel::errors::DecodeError<_>>>()?;
             #(#postprocess)*
         })
     } else {
         match_branches.push(quote! {
             #name_str => {
-                Some(Err(::knuffel::Error::new(#child.span(),
+                #ctx.emit_error(::knuffel::errors::DecodeError::unexpected(
+                    #child, "node",
                     format!("unexpected node `{}`",
-                            #name_str.escape_default()))))
+                            #name_str.escape_default())));
+                None
             }
         });
 
@@ -689,7 +735,7 @@ fn decode_children(s: &Struct, children: &syn::Ident,
                 match &**#child.node_name {
                     #(#match_branches)*
                 }
-            }).collect::<Result<(), ::knuffel::Error<_>>>()?;
+            }).collect::<Result<(), ::knuffel::errors::DecodeError<_>>>()?;
             #(#postprocess)*
         })
     }

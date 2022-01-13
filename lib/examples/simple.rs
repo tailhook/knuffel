@@ -1,6 +1,5 @@
 use std::io::Read;
 
-use knuffel::DecodeChildren;
 use miette::IntoDiagnostic;
 
 
@@ -34,8 +33,7 @@ fn main() -> miette::Result<()> {
     }))?;
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).into_diagnostic()?;
-    let ast = knuffel::parse("<stdin>", &buf)?;
-    println!("{:#?}", ast);
-    println!("{:#?}", Config::decode_children(&ast.nodes).into_diagnostic()?);
+    let cfg: Config = knuffel::parse("<stdin>", &buf)?;
+    println!("{:#?}", cfg);
     Ok(())
 }

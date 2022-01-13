@@ -1,7 +1,8 @@
 use std::fmt;
 
-use knuffel::{raw_parse, Decode};
+use knuffel::{Decode};
 use knuffel::span::Span;
+use miette::Diagnostic;
 
 
 #[derive(knuffel::DecodeScalar, Debug, PartialEq)]
@@ -18,13 +19,16 @@ struct Item {
 
 
 fn parse<T: Decode<Span>>(text: &str) -> T {
-    let doc = raw_parse(text).unwrap();
-    T::decode_node(&doc.nodes[0]).unwrap()
+    let mut nodes: Vec<T> = knuffel::parse("<test>", text).unwrap();
+    assert_eq!(nodes.len(), 1);
+    nodes.remove(0)
 }
 
 fn parse_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
-    let doc = raw_parse(text).unwrap();
-    T::decode_node(&doc.nodes[0]).unwrap_err().to_string()
+    let err = knuffel::parse::<Vec<T>>("<test>", text).unwrap_err();
+    err.related().unwrap()
+        .map(|e| e.to_string()).collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -34,5 +38,5 @@ fn parse_some_scalar() {
     assert_eq!(parse::<Item>(r#"node "another-option""#),
                Item { value: SomeScalar::AnotherOption } );
     assert_eq!(parse_err::<Item>(r#"node "test""#),
-        "5..11: expected one of `first`, `another-option`");
+        "expected one of `first`, `another-option`");
 }

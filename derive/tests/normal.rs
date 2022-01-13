@@ -2,7 +2,9 @@ use std::fmt;
 use std::collections::BTreeMap;
 use std::default::Default;
 
-use knuffel::{Decode, span::Span, raw_parse};
+use miette::Diagnostic;
+
+use knuffel::{Decode, span::Span};
 use knuffel::traits::DecodeChildren;
 
 
@@ -141,23 +143,27 @@ struct Bytes {
 }
 
 fn parse<T: Decode<Span>>(text: &str) -> T {
-    let doc = raw_parse(text).unwrap();
-    T::decode_node(&doc.nodes[0]).unwrap()
-}
-
-fn parse_doc<T: DecodeChildren<Span>>(text: &str) -> T {
-    let doc = raw_parse(text).unwrap();
-    T::decode_children(&doc.nodes).unwrap()
+    let mut nodes: Vec<T> = knuffel::parse("<test>", text).unwrap();
+    assert_eq!(nodes.len(), 1);
+    nodes.remove(0)
 }
 
 fn parse_err<T: Decode<Span>+fmt::Debug>(text: &str) -> String {
-    let doc = raw_parse(text).unwrap();
-    T::decode_node(&doc.nodes[0]).unwrap_err().to_string()
+    let err = knuffel::parse::<Vec<T>>("<test>", text).unwrap_err();
+    err.related().unwrap()
+        .map(|e| e.to_string()).collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_doc<T: DecodeChildren<Span>>(text: &str) -> T {
+    knuffel::parse("<test>", text).unwrap()
 }
 
 fn parse_doc_err<T: DecodeChildren<Span>+fmt::Debug>(text: &str) -> String {
-    let doc = raw_parse(text).unwrap();
-    T::decode_children(&doc.nodes).unwrap_err().to_string()
+    let err = knuffel::parse::<T>("<test>", text).unwrap_err();
+    err.related().unwrap()
+        .map(|e| e.to_string()).collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -165,9 +171,9 @@ fn parse_arg1() {
     assert_eq!(parse::<Arg1>(r#"node "hello""#),
                Arg1 { name: "hello".into() } );
     assert_eq!(parse_err::<Arg1>(r#"node "hello" "world""#),
-        "13..20: unexpected argument");
+        "unexpected argument");
     assert_eq!(parse_err::<Arg1>(r#"node"#),
-        "0..4: additional argument `name` is required");
+        "additional argument `name` is required");
 }
 
 #[test]
@@ -175,7 +181,7 @@ fn parse_arg_default() {
     assert_eq!(parse::<ArgDef>(r#"node "hello""#),
                ArgDef { name: "hello".into() } );
     assert_eq!(parse_err::<ArgDef>(r#"node "hello" "world""#),
-        "13..20: unexpected argument");
+        "unexpected argument");
     assert_eq!(parse::<ArgDef>(r#"node"#),
                ArgDef { name: "".into() } );
 }
@@ -185,7 +191,7 @@ fn parse_arg_def_value() {
     assert_eq!(parse::<ArgDefValue>(r#"node "hello""#),
                ArgDefValue { name: "hello".into() } );
     assert_eq!(parse_err::<ArgDefValue>(r#"node "hello" "world""#),
-        "13..20: unexpected argument");
+        "unexpected argument");
     assert_eq!(parse::<ArgDefValue>(r#"node"#),
                ArgDefValue { name: "unnamed".into() } );
 }
@@ -203,9 +209,9 @@ fn parse_prop() {
     assert_eq!(parse::<Prop1>(r#"node label="hello""#),
                Prop1 { label: "hello".into() } );
     assert_eq!(parse_err::<Prop1>(r#"node label="hello" y="world""#),
-        "19..20: unexpected property `y`");
+        "unexpected property `y`");
     assert_eq!(parse_err::<Prop1>(r#"node"#),
-        "0..4: property `label` is required");
+        "property `label` is required");
 }
 
 #[test]
@@ -229,9 +235,9 @@ fn parse_prop_named() {
     assert_eq!(parse::<PropNamed>(r#"node x="hello""#),
                PropNamed { label: "hello".into() } );
     assert_eq!(parse_err::<PropNamed>(r#"node label="hello" y="world""#),
-        "5..10: unexpected property `label`");
+        "unexpected property `label`");
     assert_eq!(parse_err::<PropNamed>(r#"node"#),
-        "0..4: property `x` is required");
+        "property `x` is required");
 }
 
 #[test]
@@ -239,9 +245,9 @@ fn parse_unwrap() {
     assert_eq!(parse::<Unwrap>(r#"node { label "hello"; }"#),
                Unwrap { label: "hello".into() } );
     assert_eq!(parse_err::<Unwrap>(r#"node label="hello""#),
-        "5..10: unexpected property `label`");
+        "unexpected property `label`");
     assert_eq!(parse_err::<Unwrap>(r#"node"#),
-        "0..4: child node `label` is required");
+        "child node `label` is required");
     assert_eq!(parse_doc::<Unwrap>(r#"label "hello""#),
                Unwrap { label: "hello".into() } );
 }
@@ -315,7 +321,7 @@ fn parse_filtered_children() {
                    ]
                });
     assert_eq!(parse_doc_err::<FilteredChildren>(r#"some"#),
-               "0..4: unexpected node `some`");
+               "unexpected node `some`");
 }
 
 #[test]
@@ -336,9 +342,10 @@ fn parse_child() {
                    flag: false,
                });
     assert_eq!(parse_err::<Child>(r#"parent { something; }"#),
-               "9..19: unexpected node `something`");
+               "unexpected node `something`\n\
+                child node `main` is required");
     assert_eq!(parse_err::<Child>(r#"parent"#),
-               "0..6: child node `main` is required");
+               "child node `main` is required");
 
     assert_eq!(parse_doc::<Child>(r#"main label="val1""#),
                Child {
@@ -357,7 +364,8 @@ fn parse_child() {
                    flag: true,
                });
     assert_eq!(parse_doc_err::<Child>(r#"something"#),
-               "0..9: unexpected node `something`");
+               "unexpected node `something`\n\
+                child node `main` is required");
     assert_eq!(parse_doc_err::<Child>(r#""#),
                "child node `main` is required");
 }
@@ -393,7 +401,7 @@ fn parse_enum() {
     assert_eq!(parse::<Variant>(r#"prop1 label="hello""#),
                Variant::Prop1(Prop1 { label: "hello".into() }));
     assert_eq!(parse_err::<Variant>(r#"something"#),
-        "0..9: expected one of `arg1`, `prop1`");
+        "expected one of `arg1`, `prop1`");
 }
 
 #[test]
@@ -401,7 +409,7 @@ fn parse_str() {
     assert_eq!(parse_doc::<Parse>(r#"listen "127.0.0.1:8080""#),
                Parse { listen: "127.0.0.1:8080".parse().unwrap() });
     assert_eq!(parse_doc_err::<Parse>(r#"listen "2/3""#),
-        "7..12: invalid IP address syntax");
+        "invalid IP address syntax");
 }
 
 #[test]
@@ -411,7 +419,7 @@ fn parse_bytes() {
     assert_eq!(parse_doc::<Bytes>(r#"data "world""#),
                Bytes { data: b"world".to_vec() });
     assert_eq!(parse_doc_err::<Bytes>(r#"data (base64)"2/3""#),
-        "13..18: Invalid last symbol 51, offset 2.");
+        "Invalid last symbol 51, offset 2.");
 }
 
 #[test]
@@ -419,5 +427,5 @@ fn parse_extra() {
     assert_eq!(parse::<Extra>(r#"data"#),
                Extra { field: "".into() });
     assert_eq!(parse_err::<Extra>(r#"data x=1"#),
-        "5..6: unexpected property `x`");
+        "unexpected property `x`");
 }

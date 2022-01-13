@@ -67,7 +67,7 @@ pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
 
 #[test]
 fn normal() {
-    let doc = raw_parse(r#"node "hello""#).unwrap();
+    let doc = parse_ast::<Span>("<embedded.kdl>", r#"node "hello""#).unwrap();
     assert_eq!(doc.nodes.len(), 1);
     assert_eq!(&**doc.nodes[0].node_name, "node");
 }

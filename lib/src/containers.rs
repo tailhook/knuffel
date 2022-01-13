@@ -143,3 +143,18 @@ impl<S: ErrorSpan, T: DecodeScalar<S>> DecodeScalar<S> for Rc<T> {
         DecodeScalar::raw_decode(value, ctx).map(Rc::new)
     }
 }
+
+impl<S: ErrorSpan, T: Decode<S>> DecodeChildren<S> for Vec<T> {
+    fn decode_children(nodes: &[SpannedNode<S>], ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        let mut result = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            match Decode::decode_node(node, ctx) {
+                Ok(node) => result.push(node),
+                Err(e) => ctx.emit_error(e),
+            }
+        }
+        Ok(result)
+    }
+}
