@@ -99,7 +99,7 @@ pub enum DecodeError<S: ErrorSpan> {
 #[diagnostic()]
 pub struct SyntaxErrors<S: ErrorSpan> {
     #[related]
-    pub(crate) errors: Vec<AddSource<ParseErrorEnum<S>>>,
+    pub(crate) errors: Vec<AddSource<ParseError<S>>>,
 }
 
 #[derive(Debug, Diagnostic, Error)]
@@ -123,13 +123,13 @@ pub(crate) enum TokenFormat {
 struct FormatUnexpected<'x>(&'x TokenFormat, &'x BTreeSet<TokenFormat>);
 
 #[derive(Debug, Diagnostic, Error)]
-pub(crate) enum ParseErrorEnum<S: ErrorSpan> {
+pub(crate) enum ParseError<S: ErrorSpan> {
     #[error("{}", FormatUnexpected(found, expected))]
     #[diagnostic()]
     Unexpected {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: S,
+        span: S,
         found: TokenFormat,
         expected: BTreeSet<TokenFormat>,
     },
@@ -150,7 +150,7 @@ pub(crate) enum ParseErrorEnum<S: ErrorSpan> {
     Message {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: S,
+        span: S,
         message: String,
     },
     #[error("{}", message)]
@@ -158,7 +158,7 @@ pub(crate) enum ParseErrorEnum<S: ErrorSpan> {
     MessageWithHelp {
         label: Option<&'static str>,
         #[label("{}", label.unwrap_or("unexpected token"))]
-        position: S,
+        span: S,
         message: String,
         help: &'static str,
     },
@@ -243,9 +243,9 @@ impl fmt::Display for FormatUnexpected<'_> {
     }
 }
 
-impl<S: ErrorSpan> ParseErrorEnum<S> {
+impl<S: ErrorSpan> ParseError<S> {
     pub(crate) fn with_expected_token(mut self, token: &'static str) -> Self {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match &mut self {
             Unexpected { ref mut expected, .. } => {
                 *expected = [TokenFormat::Token(token)].into_iter().collect();
@@ -255,7 +255,7 @@ impl<S: ErrorSpan> ParseErrorEnum<S> {
         self
     }
     pub(crate) fn with_expected_kind(mut self, token: &'static str) -> Self {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match &mut self {
             Unexpected { ref mut expected, .. } => {
                 *expected = [TokenFormat::Kind(token)].into_iter().collect();
@@ -265,7 +265,7 @@ impl<S: ErrorSpan> ParseErrorEnum<S> {
         self
     }
     pub(crate) fn with_no_expected(mut self) -> Self {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match &mut self {
             Unexpected { ref mut expected, .. } => {
                 *expected = BTreeSet::new();
@@ -275,25 +275,25 @@ impl<S: ErrorSpan> ParseErrorEnum<S> {
         self
     }
     #[allow(dead_code)]
-    pub(crate) fn map_span<T>(self, f: impl Fn(S) -> T) -> ParseErrorEnum<T>
+    pub(crate) fn map_span<T>(self, f: impl Fn(S) -> T) -> ParseError<T>
         where T: ErrorSpan,
     {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match self {
-            Unexpected { label, position, found, expected }
-            => Unexpected { label, position: f(position), found, expected },
+            Unexpected { label, span, found, expected }
+            => Unexpected { label, span: f(span), found, expected },
             Unclosed { label, opened_at, opened, expected_at, expected, found }
             => Unclosed { label, opened_at: f(opened_at), opened,
                           expected_at: f(expected_at), expected, found },
-            Message { label, position, message }
-            => Message { label, position: f(position), message },
-            MessageWithHelp { label, position, message, help }
-            => MessageWithHelp { label, position: f(position), message, help },
+            Message { label, span, message }
+            => Message { label, span: f(span), message },
+            MessageWithHelp { label, span, message, help }
+            => MessageWithHelp { label, span: f(span), message, help },
         }
     }
 }
 
-impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
+impl<S: Span> chumsky::Error<char> for ParseError<S> {
     type Span = S;
     type Label = &'static str;
     fn expected_input_found<Iter>(span: Self::Span, expected: Iter,
@@ -301,15 +301,15 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
         -> Self
         where Iter: IntoIterator<Item = Option<char>>
     {
-        ParseErrorEnum::Unexpected {
+        ParseError::Unexpected {
             label: None,
-            position: span,
+            span,
             found: found.into(),
             expected: expected.into_iter().map(Into::into).collect(),
         }
     }
     fn with_label(mut self, new_label: Self::Label) -> Self {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match self {
             Unexpected { ref mut label, .. } => *label = Some(new_label),
             Unclosed { ref mut label, .. } => *label = new_label,
@@ -319,7 +319,7 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
         self
     }
     fn merge(mut self, other: Self) -> Self {
-        use ParseErrorEnum::*;
+        use ParseError::*;
         match (&mut self, other) {
             (Unclosed { .. }, _) => self,
             (_, other@Unclosed { .. }) => other,
@@ -339,7 +339,7 @@ impl<S: Span> chumsky::Error<char> for ParseErrorEnum<S> {
         expected: char,
         found: Option<char>
     ) -> Self {
-        ParseErrorEnum::Unclosed {
+        ParseError::Unclosed {
             label: "delimited",
             opened_at: unclosed_span,
             opened: unclosed.into(),

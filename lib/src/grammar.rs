@@ -6,7 +6,7 @@ use crate::ast::{Literal, TypeName, Node, Value, Integer, Decimal, Radix};
 use crate::ast::{SpannedName, SpannedNode, Document};
 use crate::span::{Spanned};
 use crate::traits::{Span};
-use crate::errors::{ParseErrorEnum as Error, TokenFormat};
+use crate::errors::{ParseError as Error, TokenFormat};
 
 
 fn begin_comment<S: Span>(which: char)
@@ -162,7 +162,7 @@ fn expected_kind(s: &'static str) -> BTreeSet<TokenFormat> {
 }
 
 fn esc_char<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
-    filter_map(|position, c| match c {
+    filter_map(|span, c| match c {
         '"'|'\\'|'/' => Ok(c),
         'b' => Ok('\u{0008}'),
         'f' => Ok('\u{000C}'),
@@ -171,16 +171,16 @@ fn esc_char<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
         't' => Ok('\t'),
         c => Err(Error::Unexpected {
             label: Some("invalid escape char"),
-            position,
+            span,
             found: c.into(),
             expected: "\"\\/bfnrt".chars().map(|c| c.into()).collect(),
         })
     })
     .or(just('u').ignore_then(
-            filter_map(|position, c: char| c.is_digit(16).then(|| c)
+            filter_map(|span, c: char| c.is_digit(16).then(|| c)
                 .ok_or_else(|| Error::Unexpected {
                     label: Some("unexpected character"),
-                    position,
+                    span,
                     found: c.into(),
                     expected: expected_kind("hexadecimal digit"),
                 }))
@@ -188,14 +188,14 @@ fn esc_char<S: Span>() -> impl Parser<char, char, Error=Error<S>> {
             .at_least(1)
             .at_most(6)
             .delimited_by(just('{'), just('}'))
-            .try_map(|hex_chars, position| {
+            .try_map(|hex_chars, span| {
                 let s = hex_chars.into_iter().collect::<String>();
                 let c =
                     u32::from_str_radix(&s, 16).map_err(|e| e.to_string())
                     .and_then(|n| char::try_from(n).map_err(|e| e.to_string()))
                     .map_err(|e| Error::Message {
                         label: Some("invalid character code"),
-                        position,
+                        span,
                         message: e.to_string(),
                     })?;
                 Ok(c)
@@ -236,23 +236,23 @@ fn bare_ident<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
         sign.repeated().exactly(1),
         id_sans_sign_dig().chain(id_char().repeated())
     ))
-    .map(|v| v.into_iter().collect()).try_map(|s: String, position| {
+    .map(|v| v.into_iter().collect()).try_map(|s: String, span| {
         match &s[..] {
             "true" => Err(Error::Unexpected {
                 label: Some("keyword"),
-                position,
+                span,
                 found: TokenFormat::Token("true"),
                 expected: expected_kind("identifier"),
             }),
             "false" => Err(Error::Unexpected {
                 label: Some("keyword"),
-                position,
+                span,
                 found: TokenFormat::Token("false"),
                 expected: expected_kind("identifier"),
             }),
             "null" => Err(Error::Unexpected {
                 label: Some("keyword"),
-                position,
+                span,
                 found: TokenFormat::Token("null"),
                 expected: expected_kind("identifier"),
             }),
@@ -272,7 +272,7 @@ fn ident<S: Span>() -> impl Parser<char, Box<str>, Error=Error<S>> {
     // throw error for numbers (mapped to `Result::Err`)
     .try_map(|res, span| res.map_err(|_| Error::Unexpected {
         label: Some("unexpected number"),
-        position: span,
+        span,
         found: TokenFormat::Kind("number"),
         expected: expected_kind("identifier"),
     }))
@@ -409,7 +409,7 @@ fn prop_or_arg_inner<S: Span>()
                     (Literal::Bool(_) | Literal::Null, Some(_)) => {
                         Err(Error::Unexpected {
                             label: Some("unexpected keyword"),
-                            position: name_span,
+                            span: name_span,
                             found: TokenFormat::Kind("keyword"),
                             expected: [
                                 TokenFormat::Kind("identifier"),
@@ -420,7 +420,7 @@ fn prop_or_arg_inner<S: Span>()
                     (Literal::Int(_) | Literal::Decimal(_), Some(_)) => {
                         Err(Error::MessageWithHelp {
                             label: Some("unexpected number"),
-                            position: name_span,
+                            span: name_span,
                             message: "numbers cannot be used as property names"
                                 .into(),
                             help: "consider enclosing in double quotes \"..\"",
@@ -440,7 +440,7 @@ fn prop_or_arg_inner<S: Span>()
                 if value.is_none() {
                     emit(Error::MessageWithHelp {
                         label: Some("unexpected identifier"),
-                        position: span,
+                        span,
                         message: "identifiers cannot be used as arguments"
                             .into(),
                         help: "consider enclosing in double quotes \"..\"",
@@ -565,7 +565,7 @@ mod test {
     use std::sync::Arc;
     use chumsky::prelude::*;
     use miette::NamedSource;
-    use crate::errors::{SyntaxErrors, ParseErrorEnum, AddSource, KdlSource};
+    use crate::errors::{SyntaxErrors, ParseError, AddSource, KdlSource};
     use crate::span::Span;
     use crate::ast::{Literal, TypeName, Radix, Decimal, Integer};
     use crate::traits::sealed::Sealed;
@@ -585,7 +585,7 @@ mod test {
     }
 
     fn parse<'x, P, T>(p: P, text: &'x str) -> Result<T, String>
-        where P: Parser<char, T, Error=ParseErrorEnum<Span>>
+        where P: Parser<char, T, Error=ParseError<Span>>
     {
         p.then_ignore(end())
         .parse(Span::stream(text)).map_err(|errors| {
