@@ -59,6 +59,7 @@ impl<T> ErrorSpan for T
 
 pub trait Span: sealed::Sealed + chumsky::Span + ErrorSpan {}
 
+#[allow(missing_debug_implementations)]
 pub(crate) mod sealed {
     pub type Stream<'a, S, T> = chumsky::Stream<
         'a, char, S, Map<std::str::Chars<'a>, T>

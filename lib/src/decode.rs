@@ -8,6 +8,7 @@ use crate::errors::{DecodeError, ExpectedType};
 use crate::traits::ErrorSpan;
 
 
+#[derive(Debug)]
 pub struct Context<S: ErrorSpan> {
     errors: Vec<DecodeError<S>>,
     extensions: HashMap<TypeId, Box<dyn Any>>,

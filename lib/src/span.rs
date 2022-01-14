@@ -29,6 +29,7 @@ pub struct LinePos {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineSpan(pub LinePos, pub LinePos);
 
+#[allow(missing_debug_implementations)]
 mod sealed {
 
     pub struct OffsetTracker {
