@@ -249,6 +249,7 @@ impl traits::sealed::Sealed for LineSpan {
     }
 }
 
+#[cfg(feature="line-numbers")]
 impl traits::Span for LineSpan {}
 
 impl<T, S> Spanned<T, S> {

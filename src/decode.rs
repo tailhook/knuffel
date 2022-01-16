@@ -71,7 +71,8 @@ pub fn bytes<S: ErrorSpan>(value: &Value<S>, ctx: &mut Context<S>) -> Vec<u8> {
                 }
                 #[cfg(not(feature="base64"))] {
                     ctx.emit_error(DecodeError::unsupported(
-                            value, "base64 support is not compiled in"));
+                            &value.literal,
+                            "base64 support is not compiled in"));
                     Default::default()
                 }
             }
