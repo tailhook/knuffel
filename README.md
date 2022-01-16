@@ -1,5 +1,5 @@
-A [KDL](https://kdl.dev) configuration file format parser with great error
-reporting.
+A [KDL](https://kdl.dev) file format parser with great error reporting and
+convenient derive macros.
 
 # About KDL
 
@@ -151,6 +151,10 @@ fn main() -> miette::Result<()> {
 ```
 
 See [miette guide] for other ways of configuring error output.
+
+# The Name
+
+KDL is pronounced as cuddle. "Knuffel" means the same as cuddle in Dutch.
 
 
 License

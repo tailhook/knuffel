@@ -9,8 +9,8 @@
 //! information.
 //!
 //! On the other hand, on the decode stage you can convert your span types into
-//! more elaborate thing that includes file name or can refer to a default
-//! configuration value. See [`traits::DecodeSpan`].
+//! more elaborate thing that includes file name or can refer to the defaults
+//! as a separate kind of span. See [`traits::DecodeSpan`].
 use std::fmt;
 use std::ops::Range;
 

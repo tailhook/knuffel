@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
-use crate::ast::{Literal, BuiltinType, Value};
+use crate::ast::{Literal, BuiltinType, Value, SpannedNode};
 use crate::errors::{DecodeError, ExpectedType};
 use crate::traits::ErrorSpan;
 
@@ -97,6 +97,38 @@ pub fn bytes<S: ErrorSpan>(value: &Value<S>, ctx: &mut Context<S>) -> Vec<u8> {
     }
 }
 
+/// Emits error(s) if node is not a flag node
+///
+/// Flag node is a node that has no arguments, properties or children.
+///
+/// Used internally by `#[knuffel(child)] x: bool,`. But can be used
+/// manually for implementing [`DecodeScalar`](crate::traits::DecodeScalar).
+pub fn check_flag_node<S: ErrorSpan>(
+    node: &SpannedNode<S>, ctx: &mut Context<S>)
+{
+    for arg in &node.arguments {
+        ctx.emit_error(DecodeError::unexpected(
+                &arg.literal, "argument",
+                "unexpected argument"));
+    }
+    for (name, _) in &node.properties {
+        ctx.emit_error(DecodeError::unexpected(
+            name, "property",
+            format!("unexpected property `{}`",
+                    name.escape_default())));
+    }
+    if let Some(children) = &node.children {
+        for child in children.iter() {
+            ctx.emit_error(
+                DecodeError::unexpected(
+                    child, "node",
+                    format!("unexpected node `{}`",
+                        child.node_name.escape_default())
+                ));
+        }
+    }
+}
+
 impl<S: ErrorSpan> Context<S> {
     pub(crate) fn new() -> Context<S> {
         Context {
@@ -123,8 +155,8 @@ impl<S: ErrorSpan> Context<S> {
     ///
     /// These values aren't used by the knuffel itself. But can be used by
     /// user-defined decoders to get some value. Each type can have a single but
-    /// separate value set. So users are encouraged to use [new type idiom]
-    /// (https://doc.rust-lang.org/rust-by-example/generics/new_types.html)
+    /// separate value set. So users are encouraged to use [new type idiom
+    /// ](https://doc.rust-lang.org/rust-by-example/generics/new_types.html)
     /// to avoid conflicts with other libraries.
     ///
     /// It's also discourated to use `set` in the decoder. It's expeced that

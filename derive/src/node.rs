@@ -545,6 +545,22 @@ fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
                     ::insert_child(&mut #dest, #node, #ctx)?
                 => Ok(true),
             })
+        } else if matches!(child_def.mode, ChildMode::Bool) {
+            let dup_err = format!("duplicate node `{}`, single node expected",
+                                  child_name.escape_default());
+            match_branches.push(quote! {
+                #child_name => {
+                    ::knuffel::decode::check_flag_node(#node, #ctx);
+                    if #dest {
+                        #ctx.emit_error(
+                            ::knuffel::errors::DecodeError::unexpected(
+                                &#node.node_name, "node", #dup_err));
+                    } else {
+                        #dest = true;
+                    }
+                    Ok(true)
+                }
+            });
         } else {
             let dup_err = format!("duplicate node `{}`, single node expected",
                                   child_name.escape_default());
@@ -552,11 +568,11 @@ fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
             match_branches.push(quote! {
                 #child_name => {
                     if #dest.is_some() {
-                        Err(::knuffel::errors::DecodeError::unexpected(
-                            &#node.node_name, "node", #dup_err))
-                    } else {
-                        #decode
+                        #ctx.emit_error(
+                            ::knuffel::errors::DecodeError::unexpected(
+                                &#node.node_name, "node", #dup_err));
                     }
+                    #decode
                 }
             });
         }
@@ -746,29 +762,7 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
                 });
                 match_branches.push(quote! {
                     #child_name => {
-                        for arg in &#child.arguments {
-                            #ctx.emit_error(
-                                ::knuffel::errors::DecodeError::unexpected(
-                                    &arg.literal, "argument",
-                                    "unexpected argument"));
-                        }
-                        for (name, _) in &#child.properties {
-                            #ctx.emit_error(
-                                ::knuffel::errors::DecodeError::unexpected(
-                                name, "property",
-                                format!("unexpected property `{}`",
-                                        name.escape_default())));
-                        }
-                        if let Some(children) = &#child.children {
-                            for child in children.iter() {
-                                #ctx.emit_error(
-                                    ::knuffel::errors::DecodeError::unexpected(
-                                        child, "node",
-                                        format!("unexpected node `{}`",
-                                            child.node_name.escape_default())
-                                    ));
-                            }
-                        }
+                        ::knuffel::decode::check_flag_node(#child, #ctx);
                         if #fld {
                             #ctx.emit_error(
                                 ::knuffel::errors::DecodeError::unexpected(

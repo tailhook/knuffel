@@ -7,11 +7,13 @@ This trait and derive is used to decode a single node of the KDL document.
 There are few things that derive can be implemented for:
 1. Structure with named or unnamed fields. Most of the text here is about this
    case.
-2. A single-field "new type" wrapper around such structure `Wrapper(Inner)`
+2. A single-field [new type] wrapper around such structure `Wrapper(Inner)`
    where `Inner` implements `Decode` (this is a tuple struct with single
    argument without annotations).
 3. Unit struct
 4. [Enum](#enums), where each variant corresponds to a specific node name
+
+[new type]: https://doc.rust-lang.org/rust-by-example/generics/new_types.html
 
 There are three kinds of things can fit structure fields that must be
 annotated appropriately: [arguments](#arguments), [properties](#properties)
@@ -325,7 +327,140 @@ out their children into the right buckets. Also see [Enums](#enums).
 
 ## Boolean Child Fields
 
+Sometimes you want to track just the presence of the child in the node.
+
+For example this document:
+```kdl
+plugin "first" {
+    auto-start
+}
+plugin "second"
+```
+... can be parsed into the list of the following structures:
+```rust
+#[derive(knuffel::Decode)]
+struct Plugin {
+    #[knuffel(child)]
+    auto_start: bool,
+}
+```
+And in this case `auto-start` node may be omitted without an error even
+though it's not wrapped into an `Option`.
+
+No arguments, properties and children are allowed in the boolean nodes.
+
+Note: due to limitations of the procedural macros in Rust, boolean children
+must use `bool` in this specific notation. If you shadow `bool` type by some
+import the results are undefined (knuffel will still think it's bool node, but
+it may not work).
+
+
 ## Unwrapping
+
+The `unwrap` attribute for `child` allows adding extra children in the KDL
+document that aren't represented in the final structure, but they play
+important role in making document readable.
+
+It works by transforming the following:
+```rust,ignore
+#[derive(knuffel::Decode)]
+struct Node {
+    #[knuffel(child, unwrap(/* attributes */))]
+    field: String,
+}
+```
+... into something like this:
+```
+#[derive(knuffel::Decode)]
+struct TmpChild {
+    #[knuffel(/* attributes */)]
+    field: String,
+}
+#[derive(knuffel::Decode)]
+struct Node {
+    #[knuffel(child)]
+    field: TmpChild,
+}
+```
+... and then unpacks `TmpChild` to put target type into the field.
+
+Most of the attributes can be used in place of `/* attributes */`. Including:
+1. `argument` (the most common, see [below](#properties-become-children)) and
+   `arguments`
+2. `property` (usually in the form of `property(name="other_name")` to
+   avoid repetitive KDL) and `properties`
+3. `child` and `children` (see example [below](#grouping-things))
+
+Following are some nice examples of using `unwrap`.
+
+### Properties Become Children
+
+In nodes with many properties it might be convenient to put them into children instead.
+
+So instead of this:
+```kdl
+plugin name="my-plugin" url="https://example.com" {}
+```
+... users can write this:
+```kdl
+plugin {
+    name "my-plugin"
+    url "https://example.com"
+}
+```
+
+Here is the respective Rust structure:
+```rust
+#[derive(knuffel::Decode)]
+struct Plugin {
+    #[knuffel(child, unwrap(argument))]
+    name: String,
+    #[knuffel(child, unwrap(argument))]
+    url: String,
+}
+```
+
+You can read this like: `name` field parses a child that contains a single
+argument of type `String`.
+
+### Grouping Things
+
+Sometimes instead of different kinds of nodes scattered around you may want to
+group them.
+
+So instead of this:
+```kdl
+plugin "a"
+file "aa"
+plugin "b"
+file "bb"
+```
+You nave a KDL document like this:
+```kdl
+plugins {
+    plugin "a"
+    plugin "b"
+}
+files {
+    file "aa"
+    file "bb"
+}
+```
+This can be parsed into the following structure:
+```rust
+# #[derive(knuffel::Decode)] struct Plugin {}
+# #[derive(knuffel::Decode)] struct File {}
+#[derive(knuffel::Decode)]
+struct Document {
+    #[knuffel(child, unwrap(children(name="plugin")))]
+    plugins: Vec<Plugin>,
+    #[knuffel(child, unwrap(children(name="file")))]
+    files: Vec<File>,
+}
+```
+
+You can read this like: `plugins` field parses a child that contains a set of
+children named `plugin`.
 
 
 ## Root Document
