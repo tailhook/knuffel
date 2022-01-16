@@ -33,6 +33,7 @@ pub fn decode_derive(input: proc_macro::TokenStream)
 }
 
 #[proc_macro_derive(DecodeScalar, attributes(knuffel))]
+#[doc = include_str!("../../derive_decode_scalar.md")]
 pub fn decode_scalar_derive(input: proc_macro::TokenStream)
     -> proc_macro::TokenStream
 {

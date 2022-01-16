@@ -26,7 +26,8 @@ All annotations are enclosed by `#[knuffel(..)]` attribute.
 Both arguments and properties can decode [scalars](#scalars).
 
 If structure only has `child` and `children` fields (see [below](#children)) it
-can be used as a root document (the output of [`knuffel::parse`]). Or root of the document can be `Vec<T> where T: Decode`.
+can be used as a root document (the output of [`knuffel::parse`]). Or root of
+the document can be `Vec<T> where T: Decode`.
 
 Note: node name is usually not used in the structure decoding node, it's
 matched either in parent or in an [enum](#enums).
@@ -257,7 +258,8 @@ example
 
 # Children
 
-Nodes are fundamental blocks for data hierarchy in KDL. Here are some examples of nodes:
+Nodes are fundamental blocks for data hierarchy in KDL. Here are some examples
+of nodes:
 ```kdl
 node1 "x" "y"
 (my_type)node2 prop="value" {
@@ -500,7 +502,7 @@ Note: attributes in the `unwrap` have no influence on whether structure can be
 used to decode document.
 
 Technically [DecodeChildren](knuffel::traits::DecodeChildren) trait will be
-implemented for the nodes that can be used as documents.
+implemented for the structures that can be used as documents.
 
 
 # Common Attributes
@@ -557,6 +559,84 @@ let _ = vec![
 
 # Flatten
 
+Similarly to `flatten` flag in `serde`, this allows factoring out some
+properties or children into another structure.
+
+For example:
+```rust
+#[derive(knuffel::Decode, Default)]
+struct Common {
+    #[knuffel(child, unwrap(argument))]
+    name: Option<String>,
+    #[knuffel(child, unwrap(argument))]
+    description: Option<String>
+}
+#[derive(knuffel::Decode)]
+struct Plugin {
+    #[knuffel(flatten(child))]
+    common: Common,
+    #[knuffel(child, unwrap(argument))]
+    url: String,
+}
+```
+This will parse the following:
+```kdl
+plugin {
+    name "my-plugin"
+    description "Some example plugin"
+    url "https://example.org/plugin"
+}
+```
+
+There are few limitations of the `flatten`:
+1. All fields in target structure must be optional.
+2. The target structure must implement [`Default`](std::default::Default)
+3. Only children an properties can be factored out, not arguments in current
+   implementation
+4. You must specify which directives can be used in the target structure
+    (i.e. `flatten(child, children, property, properties)`) and if `children`
+    or `properties` are forwarded to the target structure, no more children
+    and property attributes can be used in this structure following the
+    `flatten` attribute.
+
+We may lift some of these limitations later.
+
+Technically [DecodePartial](knuffel::traits::DecodePartial) trait will be
+implemented for the strucutures that can be used with the `flatten` attribute.
+
+
 # Enums
 
-* `skip` attribute
+Enums are used to differentiate nodes by name when multiple kinds of nodes are
+pushed to a single collection.
+
+For example, to parse the following list of actions:
+```kdl
+create "xxx"
+print-string "yyy" line=2
+finish
+```
+The following enum might be used:
+```rust
+# #[derive(knuffel::Decode)] struct PrintString {}
+#[derive(knuffel::Decode)]
+enum Action {
+    Create(#[knuffel(argument)] String),
+    PrintString(PrintString),
+    Finish,
+    #[knuffel(skip)]
+    InternalAction,
+}
+```
+
+The following variants supported:
+1. Single element tuple struct without arguments (`PrintString` in example),
+   which forwards node parsing to the inner element.
+2. Normal `argument`, `arguments`, `properties`, `children` fields (`Create`
+   example)
+3. Property fields with names `property(name="xxx")`
+4. Unit structs, in this case no arguments, properties and children are
+   expected in such node
+5. Variant with `skip`, cannot be deserialized and can be in any form
+
+Enum variant names are matches against node names converted into `kebab-case`.
