@@ -22,16 +22,8 @@ struct Config {
 }
 
 fn main() -> miette::Result<()> {
-    miette::set_hook(Box::new(|_| {
-        Box::new(miette::MietteHandlerOpts::new()
-            .terminal_links(true)
-            .unicode(true)
-            .force_graphical(true)
-            .context_lines(1)
-            .tab_width(4)
-            .build())
-    }))?;
     let mut buf = String::new();
+    println!("Please type KDL document, press Return, Ctrl+D to finish");
     std::io::stdin().read_to_string(&mut buf).into_diagnostic()?;
     let cfg: Config = knuffel::parse("<stdin>", &buf)?;
     println!("{:#?}", cfg);

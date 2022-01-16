@@ -47,6 +47,7 @@ containers:
 
     environ:
       HOME: /work/target
+      LANG: C.UTF-8
       RUST_BACKTRACE: 1
 
   nightly:
