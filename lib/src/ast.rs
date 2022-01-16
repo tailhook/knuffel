@@ -1,27 +1,49 @@
+//! Structures that represent abstract syntax tree (AST) of the KDL document
+//!
+//! All of these types are parameterized by the `S` type which is a span type
+//! (perhaps implements [`Span`](crate::traits::Span). The idea is that most of
+//! the time spans are used for errors (either at parsing time, or at runtime),
+//! and original source is somewhere around to show in error snippets. So it's
+//! faster to only track byte offsets and calculate line number and column when
+//! printing code snippet. So use [`span::Span`](crate::traits::Span).
+//!
+//! But sometimes you will not have KDL source around, or performance of
+//! priting matters (i.e. you log source spans). In that case, span should
+//! contain line and column numbers for things, use
+//! [`LineSpan`](crate::span::LineSpan) for that.
 use std::fmt;
 
 use std::collections::BTreeMap;
 
 use crate::span::Spanned;
 
+/// A shortcut for nodes children that includes span of enclosing braces `{..}`
 pub type SpannedChildren<S> = Spanned<Vec<SpannedNode<S>>, S>;
+/// KDL names with span information are represented using this type
 pub type SpannedName<S> = Spanned<Box<str>, S>;
+/// A KDL node with span of the whole node (including children)
 pub type SpannedNode<S> = Spanned<Node<S>, S>;
 
 /// Single node of the KDL document
 #[derive(Debug, Clone)]
 pub struct Node<S> {
+    /// A type name if specified in parenthesis
     pub type_name: Option<Spanned<TypeName, S>>,
-    pub node_name: Spanned<Box<str>, S>,
+    /// A node name
+    pub node_name: SpannedName<S>,
+    /// Positional arguments
     pub arguments: Vec<Value<S>>,
-    pub properties: BTreeMap<Spanned<Box<str>, S>, Value<S>>,
+    /// Named properties
+    pub properties: BTreeMap<SpannedName<S>, Value<S>>,
+    /// Node's children. This field is not none if there are braces `{..}`
     pub children: Option<SpannedChildren<S>>,
 }
 
 /// KDL document root
 #[derive(Debug, Clone)]
 pub struct Document<S> {
-    pub nodes: Vec<Spanned<Node<S>, S>>,
+    /// Nodes of the document
+    pub nodes: Vec<SpannedNode<S>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,10 +62,12 @@ pub struct Integer(pub(crate) Radix, pub(crate) Box<str>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decimal(pub(crate) Box<str>);
 
-/// Possibly typed value
+/// Possibly typed KDL scalar value
 #[derive(Debug, Clone)]
 pub struct Value<S> {
+    /// A type name if specified in parenthesis
     pub type_name: Option<Spanned<TypeName, S>>,
+    /// The actual value literal
     pub literal: Spanned<Literal, S>,
 }
 
@@ -57,18 +81,27 @@ enum TypeNameInner {
     Custom(Box<str>),
 }
 
-/// Known type identifier described by specification
+/// Known type identifier described by the KDL specification
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuiltinType {
+    /// `u8`: 8-bit unsigned integer type
     U8,
+    /// `i8`: 8-bit signed integer type
     I8,
+    /// `u16`: 16-bit unsigned integer type
     U16,
+    /// `i16`: 16-bit signed integer type
     I16,
+    /// `u32`: 32-bit unsigned integer type
     U32,
+    /// `i32`: 32-bit signed integer type
     I32,
+    /// `u64`: 64-bit unsigned integer type
     U64,
+    /// `i64`: 64-bit signed integer type
     I64,
+    /// `base64` denotes binary bytes type encoded using base64 encoding
     Base64,
 }
 
@@ -98,6 +131,8 @@ impl<S> Node<S> {
 }
 
 impl BuiltinType {
+    /// Returns string representation of the builtin type as defined by KDL
+    /// specification
     pub const fn as_str(&self) -> &'static str {
         use BuiltinType::*;
         match self {
@@ -112,6 +147,7 @@ impl BuiltinType {
             Base64 => "base64",
         }
     }
+    /// Returns `TypeName` structure for the builtin type
     pub const fn as_type(self) -> TypeName {
         TypeName(TypeNameInner::Builtin(self))
     }
@@ -136,12 +172,19 @@ impl TypeName {
             _ => TypeName(Custom(val)),
         }
     }
+    /// Returns string represenation of the type name
     pub fn as_str(&self) -> &str {
         match &self.0 {
             TypeNameInner::Builtin(t) => t.as_str(),
             TypeNameInner::Custom(t) => t.as_ref(),
         }
     }
+    /// Returns `BuiltinType` enum for the type if typename matches builtin
+    /// type
+    ///
+    /// Note: checking for `is_none()` is not forward compatible. In future we
+    /// may add additional builtin type. Always use `as_str` for types that
+    /// aren't yet builtin.
     pub const fn as_builtin(&self) -> Option<&BuiltinType> {
         match &self.0 {
             TypeNameInner::Builtin(t) => Some(t),

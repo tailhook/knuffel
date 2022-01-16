@@ -1,3 +1,16 @@
+//! Knuffel supports to kinds of the span for parsing
+//!
+//! 1. [`Span`] which only tracks byte offset from the start of the source code
+//! 2. [`LineSpan`] which also track line numbers
+//!
+//! This distinction is important during parsing stage as [`Span`] is normally
+//! faster. And [`LineSpan`] is still faster than find out line/column number
+//! for each span separately, and is also more convenient if you need this
+//! information.
+//!
+//! On the other hand, on the decode stage you can convert your span types into
+//! more elaborate thing that includes file name or can refer to a default
+//! configuration value. See [`traits::DecodeSpan`].
 use std::fmt;
 use std::ops::Range;
 
@@ -6,7 +19,7 @@ use crate::traits;
 /// Reexport of [miette::SourceSpan] trait that we use for parsing
 pub use miette::SourceSpan as ErrorSpan;
 
-/// Keeps object's boundary positions in the original file
+/// Wraps the structure to keep source code span, but also dereference to T
 #[derive(Clone, Debug)]
 pub struct Spanned<T, S> {
     pub(crate) span: S,
@@ -17,11 +30,15 @@ pub struct Spanned<T, S> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span(pub usize, pub usize);
 
-// TODO(tailhook) optimize eq to check only offset
+/// Line and column position of the datum in the source code
+// TODO(tailhook) optimize Eq to check only offset
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LinePos {
+    /// Zero-based line number
     pub line: usize,
+    /// Zero-based column number
     pub column: usize,
+    /// Zero-based byte offset
     pub offset: usize,
 }
 
@@ -48,6 +65,7 @@ mod sealed {
 
 
 impl Span {
+    /// Length of the span in bytes
     pub fn length(&self) -> usize {
         self.1.saturating_sub(self.0)
     }
@@ -234,6 +252,7 @@ impl traits::sealed::Sealed for LineSpan {
 impl traits::Span for LineSpan {}
 
 impl<T, S> Spanned<T, S> {
+    /// Converts value but keeps the same span attached
     pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Spanned<R, S> {
         Spanned {
             span: self.span,
@@ -262,6 +281,7 @@ impl<T: ?Sized, S> std::borrow::Borrow<T> for Spanned<Box<T>, S> {
 }
 
 impl<T, S> Spanned<T, S> {
+    /// Returns the span of the value
     pub fn span(&self) -> &S {
         &self.span
     }

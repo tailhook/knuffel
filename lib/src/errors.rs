@@ -1,3 +1,7 @@
+//! Error types for the knuffel library
+//!
+//! You only need [`Error`](enum@Error) exposed as `knuffel::Error` unless you
+//! do manual implementations of any of the `Decode*` traits.
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
@@ -24,76 +28,157 @@ pub(crate) struct AddSource<E: Diagnostic + Send + Sync + 'static> {
 #[derive(Debug, Clone)]
 pub(crate) struct KdlSource(pub(crate) Arc<NamedSource>);
 
+/// Main error that is returned from KDL parsers
+///
+/// These implement [`miette::Diagnostic`] so can be used to print nice error
+/// output with code snippets.
+///
+/// See [crate documentation](crate#Errors) and [miette} documentation to
+/// find out how deal with them.
 #[derive(Debug, Diagnostic, Error)]
 #[non_exhaustive]
 pub enum Error<E: ErrorSpan> {
+    /// Syntax error
+    ///
+    /// This error means that AST could not be parsed from the original text.
+    ///
+    /// Multiple errors will be shown here if parser recovery is possible.
     #[error("syntax error")]
     #[diagnostic(transparent)]
     Syntax(SyntaxErrors<E>),
+    /// Decode error
+    ///
+    /// This error mean that KDL document is fully valid and library was able to
+    /// construct AST, although decoding into the structs was not possible or
+    /// some of the user-specified validations are failed.
+    ///
+    /// Mutliple errors will be shown here if possible.
     #[error("decode error")]
     #[diagnostic(transparent)]
     Decode(DecodeErrors<E>),
 }
 
+/// An error type that is returned by decoder traits and emitted to the context
+///
+/// These are elements of the
 #[derive(Debug, Diagnostic, Error)]
+#[non_exhaustive]
 pub enum DecodeError<S: ErrorSpan> {
+    /// Unexpected type name encountered
+    ///
+    /// Type names are identifiers and strings in parenthesis before node names
+    /// or values.
     #[error("{} for {}, found {}", expected, rust_type,
             found.as_ref().map(|x| x.as_str()).unwrap_or("no type name"))]
     #[diagnostic()]
     TypeName {
+        /// Position of the type name
         #[label="unexpected type name"]
         span: S,
+        /// Type name contained in the source code
         found: Option<TypeName>,
+        /// Expected type name or type names
         expected: ExpectedType,
+        /// Rust type that is being decoded when error is encountered
         rust_type: &'static str,
     },
+    /// Different scalar kind was encountered than expected
+    ///
+    /// This is emitted when integer is used instead of string, and similar. It
+    /// may also be encountered when `null` is used for non-optional field.
     #[diagnostic()]
     #[error("expected {} scalar, found {}", expected, found)]
     ScalarKind {
+        /// Position of the unexpected scalar
         #[label("unexpected {}", found)]
         span: S,
+        /// Scalar kind (or multiple) expected at this position
         expected: ExpectedKind,
+        /// Kind of scalar that is found
         found: Kind,
     },
+    /// Some required element is missing
+    ///
+    /// This is emitted on missing required attributes, properties, or children.
+    /// (missing type names are emitted using [`DecodeError::TypeName`])
     #[diagnostic()]
     #[error("{}", message)]
     Missing {
+        /// Position of the node name of which has missing element
         #[label("node starts here")]
         span: S,
+        /// Description of what's missing
         message: String,
     },
-    // Only for errors on global level
+    /// Missing named node at top level
+    ///
+    /// This is similar to `Missing` but is only emitted for nodes on the
+    /// document level. This is separate error because there is no way to show
+    /// span where missing node is expected (end of input is not very helpful).
     #[diagnostic()]
     #[error("{}", message)]
     MissingNode {
+        /// Descriptino of what's missing
         message: String,
     },
+    /// Unexpected entity encountered
+    ///
+    /// This is emitted for entities (arguments, properties, children) that have
+    /// to matching structure field to put into, and also for nodes that aren
+    /// expected to be encountered twice.
     #[diagnostic()]
     #[error("{}", message)]
     Unexpected {
+        /// Position of the unexpected element
         #[label("unexpected {}", kind)]
         span: S,
+        /// Kind of element that was found
         kind: &'static str,
+        /// Description of the error
         message: String,
     },
+    /// Bad scalar conversion
+    ///
+    /// This error is emitted when some scalar value of right kind cannot be
+    /// converted to the Rust value. Including, but not limited to:
+    /// 1. Integer value out of range
+    /// 2. `FromStr` returned error for the value parse by
+    ///    `#[knuffel(.., str)]`
     #[error("{}", source)]
     #[diagnostic()]
     Conversion {
+        /// Position of the scalar that could not be converted
         #[label("invalid value")]
         span: S,
+        /// Original error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// Unsupported value
+    ///
+    /// This is currently used to error out on `(base64)` values when `base64`
+    /// feature is not enabled.
     #[error("{}", message)]
     #[diagnostic()]
     Unsupported {
+        /// Position of the value that is unsupported
         #[label="unsupported value"]
         span: S,
+        /// Description of why the value is not supported
         message: Cow<'static, str>,
     },
+    /// Custom error that can be emitted during decoding
+    ///
+    /// This is not used by the knuffel itself. Note most of the time it's
+    /// better to use [`DecodeError::Conversion`] as that will associate
+    /// source code span to the error.
     #[error(transparent)]
     Custom(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
+/// A wrapper that holds multiple syntax errors
+///
+/// Note currently this type is sealed. But you can have some generic access to
+/// the contained errors using [`miette::Diagnostic::related`].
 #[derive(Debug, Diagnostic, Error)]
 #[error("KDL syntax error")]
 #[diagnostic()]
@@ -102,6 +187,12 @@ pub struct SyntaxErrors<S: ErrorSpan> {
     pub(crate) errors: Vec<AddSource<ParseError<S>>>,
 }
 
+/// A wrapper that holds multiple syntax errors
+///
+/// Note currently this type is sealed. This contains a list of `DecodeError`,
+/// but we want to abstract away specifics of how that is stored. You can have
+/// some generic access to the contained errors using
+/// [`miette::Diagnostic::related`], though.
 #[derive(Debug, Diagnostic, Error)]
 #[error("KDL decode error")]
 #[diagnostic()]
@@ -351,6 +442,7 @@ impl<S: Span> chumsky::Error<char> for ParseError<S> {
 }
 
 impl<S: ErrorSpan> DecodeError<S> {
+    /// Construct [`DecodeError::Conversion`] error
     pub fn conversion<T, E>(span: &Spanned<T, S>, err: E) -> Self
         where E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     {
@@ -359,6 +451,7 @@ impl<S: ErrorSpan> DecodeError<S> {
             source: err.into(),
         }
     }
+    /// Construct [`DecodeError::ScalarKind`] error
     pub fn scalar_kind(expected: Kind, found: &Spanned<Literal, S>) -> Self {
         DecodeError::ScalarKind {
             span: found.span().clone(),
@@ -366,12 +459,14 @@ impl<S: ErrorSpan> DecodeError<S> {
             found: (&found.value).into(),
         }
     }
+    /// Construct [`DecodeError::Missing`] error
     pub fn missing(node: &SpannedNode<S>, message: impl Into<String>) -> Self {
         DecodeError::Missing {
             span: node.node_name.span().clone(),
             message: message.into(),
         }
     }
+    /// Construct [`DecodeError::Unexpected`] error
     pub fn unexpected<T>(elem: &Spanned<T, S>, kind: &'static str,
                          message: impl Into<String>)
         -> Self
@@ -382,6 +477,7 @@ impl<S: ErrorSpan> DecodeError<S> {
             message: message.into(),
         }
     }
+    /// Construct [`DecodeError::Unsupported`] error
     pub fn unsupported<T, M>(span: &Spanned<T, S>, message: M)-> Self
         where M: Into<Cow<'static, str>>,
     {
@@ -416,7 +512,7 @@ impl<S: ErrorSpan> DecodeError<S> {
     }
 }
 
-
+/// Wrapper around expected type that is used in [`DecodeError::TypeName`].
 #[derive(Debug)]
 pub struct ExpectedType {
     types: Vec<TypeName>,
@@ -424,18 +520,24 @@ pub struct ExpectedType {
 }
 
 impl ExpectedType {
+    /// Declare that decoder expects no type (no parens at all) for the value
     pub fn no_type() -> Self {
         ExpectedType {
             types: [].into(),
             no_type: true,
         }
     }
+    /// Declare the type that has to be attached to the value
     pub fn required(ty: impl Into<TypeName>) -> Self {
         ExpectedType {
             types: vec![ty.into()],
             no_type: false,
         }
     }
+    /// Declare the type that can be attached to the value
+    ///
+    /// But no type is also okay in this case (although, "no type" and specified
+    /// type can potentially have different meaning).
     pub fn optional(ty: impl Into<TypeName>) -> Self {
         ExpectedType {
             types: vec![ty.into()],
@@ -472,6 +574,9 @@ impl fmt::Display for ExpectedType {
 }
 
 
+/// Declares kind of value expected for the scalar value
+///
+/// Use [`Kind`](crate::decode::Kind) and `.into()` to create this value.
 #[derive(Debug)]
 pub struct ExpectedKind(Kind);
 

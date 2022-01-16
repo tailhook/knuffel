@@ -1,5 +1,5 @@
 #![doc = include_str!("../../README.md")]
-//#![warn(missing_docs)]
+#![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
 mod containers;

@@ -8,6 +8,7 @@ use crate::span::{Span};
 use crate::traits::{self, DecodeChildren};
 
 
+/// Parse KDL text and return AST
 pub fn parse_ast<S: traits::Span>(file_name: &str, text: &str)
     -> Result<Document<S>, Error<S>>
 {
@@ -27,12 +28,15 @@ pub fn parse_ast<S: traits::Span>(file_name: &str, text: &str)
     })
 }
 
+/// Parse KDL text and decode Rust object
 pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
     where T: DecodeChildren<Span>,
 {
     parse_with_context(file_name, text, |_| {})
 }
 
+/// Parse KLD text and decode Rust object providing extra context for the
+/// decoder
 pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
     -> Result<T, Error<S>>
     where F: FnOnce(&mut Context<S>),
@@ -67,7 +71,7 @@ pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
 
 #[test]
 fn normal() {
-    let doc = parse_ast::<Span>("<embedded.kdl>", r#"node "hello""#).unwrap();
+    let doc = parse_ast::<Span>("embedded.kdl", r#"node "hello""#).unwrap();
     assert_eq!(doc.nodes.len(), 1);
     assert_eq!(&**doc.nodes[0].node_name, "node");
 }
