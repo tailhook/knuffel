@@ -1,0 +1,35 @@
+on: [pull_request, push]
+
+name: Tests
+
+jobs:
+  build_and_test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust_version: [1.56, stable]
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust_version }}
+          default: true
+
+      - name: Normal tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+
+      - name: Build without features
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --no-default-features
+
+      - name: Normal tests without extra features (but derive is enabled)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features=derive
