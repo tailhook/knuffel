@@ -35,15 +35,17 @@ containers:
   ubuntu:
     setup:
     - !Ubuntu focal
-    - !Install [ca-certificates, git, build-essential, vim]
+    - !Install [ca-certificates, git, build-essential, vim,
+                pkg-config, libssl-dev]
 
     - !TarInstall
-      url: "https://static.rust-lang.org/dist/rust-1.56.0-x86_64-unknown-linux-gnu.tar.gz"
+      url: "https://static.rust-lang.org/dist/rust-1.58.0-x86_64-unknown-linux-gnu.tar.gz"
       script: "./install.sh --prefix=/usr \
                 --components=rustc,rust-std-x86_64-unknown-linux-gnu,cargo"
     - !TarInstall
-      url: "https://static.rust-lang.org/dist/rust-std-1.56.0-wasm32-unknown-unknown.tar.gz"
+      url: "https://static.rust-lang.org/dist/rust-std-1.58.0-wasm32-unknown-unknown.tar.gz"
       script: "./install.sh --prefix=/usr --components=rust-std-wasm32-unknown-unknown"
+    - !Sh 'cargo install cargo-release --root=/usr'
 
     environ:
       HOME: /work/target
