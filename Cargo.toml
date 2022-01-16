@@ -12,9 +12,11 @@ description = """
     Another KDL language implementation
 """
 license = "MIT/Apache-2.0"
-keywords = ["kdl", "configuration"]
+keywords = ["kdl", "configuration", "parser"]
+categories = ["parser-implementations", "configuration", "encoding"]
 homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
+rust-version = "1.56.0"
 
 [dependencies]
 #chumsky = "0.7.0"
