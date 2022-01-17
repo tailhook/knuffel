@@ -4,6 +4,7 @@ use miette::IntoDiagnostic;
 
 
 #[derive(knuffel::Decode, Debug)]
+#[allow(dead_code)]
 struct Plugin {
     #[knuffel(argument)]
     name: String,
@@ -14,6 +15,7 @@ struct Plugin {
 }
 
 #[derive(knuffel::Decode, Debug)]
+#[allow(dead_code)]
 struct Config {
     #[knuffel(child, unwrap(argument))]
     version: String,
