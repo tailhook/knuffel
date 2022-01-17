@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use chumsky::Parser;
+use miette::NamedSource;
 
 use crate::ast::Document;
 use crate::decode::Context;
-use crate::errors::{Error, AddSource, KdlSource, SyntaxErrors, DecodeErrors};
+use crate::errors::{Error, AddSource, SyntaxErrors, DecodeErrors};
 use crate::grammar;
 use crate::span::{Span};
 use crate::traits::{self, DecodeChildren};
@@ -15,7 +18,8 @@ pub fn parse_ast<S: traits::Span>(file_name: &str, text: &str)
     grammar::document()
     .parse(S::stream(text))
     .map_err(|errors| {
-        let source_code = KdlSource::new(file_name, text.to_string());
+        let source_code = Arc::new(
+            NamedSource::new(file_name, text.to_string()));
         let e = SyntaxErrors {
             errors: errors.into_iter().map(|error| {
                 AddSource {
@@ -57,7 +61,7 @@ pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
         }
         Ok(v) => return Ok(v)
     };
-    let source_code = KdlSource::new(file_name, text.to_string());
+    let source_code = Arc::new(NamedSource::new(file_name, text.to_string()));
     let e = DecodeErrors {
         errors: errors.into_iter().map(|error| {
             AddSource {

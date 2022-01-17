@@ -8,7 +8,7 @@ use std::fmt::{self, Write};
 use std::sync::Arc;
 
 use thiserror::Error;
-use miette::{Diagnostic, NamedSource, SourceCode};
+use miette::{Diagnostic, NamedSource};
 
 use crate::ast::{TypeName, Literal, SpannedNode};
 use crate::span::{Spanned};
@@ -21,12 +21,9 @@ use crate::traits::{ErrorSpan, Span};
 #[diagnostic(forward(error))]
 pub(crate) struct AddSource<E: Diagnostic + Send + Sync + 'static> {
     #[source_code]
-    pub source_code: KdlSource,
+    pub source_code: Arc<NamedSource>,
     pub error: E,
 }
-
-#[derive(Debug, Clone)]
-pub(crate) struct KdlSource(pub(crate) Arc<NamedSource>);
 
 /// Main error that is returned from KDL parsers
 ///
@@ -589,24 +586,5 @@ impl From<Kind> for ExpectedKind {
 impl fmt::Display for ExpectedKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0.as_str())
-    }
-}
-
-impl KdlSource {
-    pub(crate) fn new(path: impl AsRef<str>,
-                      source: impl SourceCode + Send + Sync + 'static) -> Self
-    {
-        KdlSource(Arc::new(NamedSource::new(path, source)))
-    }
-}
-
-impl SourceCode for KdlSource {
-    fn read_span<'a>(
-        &'a self,
-        span: &miette::SourceSpan,
-        context_lines_before: usize,
-        context_lines_after: usize
-    ) -> Result<Box<dyn miette::SpanContents<'a> + 'a>, miette::MietteError> {
-        self.0.read_span(span, context_lines_before, context_lines_after)
     }
 }

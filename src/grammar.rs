@@ -565,7 +565,7 @@ mod test {
     use std::sync::Arc;
     use chumsky::prelude::*;
     use miette::NamedSource;
-    use crate::errors::{SyntaxErrors, ParseError, AddSource, KdlSource};
+    use crate::errors::{SyntaxErrors, ParseError, AddSource};
     use crate::span::Span;
     use crate::ast::{Literal, TypeName, Radix, Decimal, Integer};
     use crate::traits::sealed::Sealed;
@@ -590,9 +590,9 @@ mod test {
         p.then_ignore(end())
         .parse(Span::stream(text)).map_err(|errors| {
             let source: std::sync::Arc<String> = (text.to_string() + " ").into();
-            let source = KdlSource(Arc::new(
+            let source = Arc::new(
                 NamedSource::new("<test>", source)
-            ));
+            );
             let e = SyntaxErrors {
                 errors: errors.into_iter().map(|error| {
                     AddSource {
