@@ -21,15 +21,16 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --workspace
 
       - name: Build without features
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --no-default-features
+          args: --workspace --no-default-features
 
       - name: Normal tests without extra features (but derive is enabled)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features=derive
+          args: --workspace --no-default-features --features=derive

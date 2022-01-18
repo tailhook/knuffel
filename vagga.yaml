@@ -28,7 +28,7 @@ commands:
   test: !Command
     description: Run tests
     container: ubuntu
-    run: [cargo, test]
+    run: [cargo, test, --workspace]
 
 containers:
 
