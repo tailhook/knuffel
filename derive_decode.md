@@ -605,6 +605,35 @@ Technically [DecodePartial](knuffel::traits::DecodePartial) trait will be
 implemented for the strucutures that can be used with the `flatten` attribute.
 
 
+# Special Values
+
+## Spans
+
+The following definition:
+```rust
+use knuffel::span::Span;  // or LineSpan
+
+#[derive(knuffel::Decode)]
+#[knuffel(span_type=Span)]
+struct Node {
+    #[knuffel(span)]
+    span: Span,  // This can be user type decoded from Span
+}
+```
+Puts position of the node in the source code into the `span` field. Span
+contains the whole node, starting from parenthesis that enclose type name if
+present otherwise node name. Includes node children if exists and semicolon or
+newline that ends the node (so includes any whitespace and coments before the
+newline if node ends by a newline, but doesn't include anything after
+semicolon).
+
+The span value might be different than one used for parsing. In this case, it
+should implement [`DecodeSpan`](knuffel::traits::DecodeSpan) trait.
+
+Independenly of whether you use custom span type, or built-in one, you have to
+specify `span_type` for the decoder, since there is no generic implementation
+of the `DecodeSpan` for any type. See [Span Type](#span-type) for more info
+
 # Enums
 
 Enums are used to differentiate nodes by name when multiple kinds of nodes are
@@ -640,3 +669,36 @@ The following variants supported:
 5. Variant with `skip`, cannot be deserialized and can be in any form
 
 Enum variant names are matches against node names converted into `kebab-case`.
+
+# Container Attributes
+
+## Span Type
+
+Usually generated implemenation is for any span type:
+```rust,ignore
+impl Decode<S> for MyStruct {
+   # ...
+}
+```
+But if you want to use `span` argument, it's unlikely to be possible to
+implement `DecodeSpan` for any type.
+
+Use use `span_type=` for implemenation of specific type:
+```rust
+use knuffel::span::Span;  // or LineSpan
+
+#[derive(knuffel::Decode)]
+#[knuffel(span_type=Span)]
+struct MyStruct {
+    #[knuffel(span)]
+    span: Span,
+}
+```
+This will generate implementation like this:
+```rust,ignore
+impl Decode<Span> for MyStruct {
+   # ...
+}
+```
+
+See [Spans](#spans) section for more info about decoding spans.

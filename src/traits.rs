@@ -88,12 +88,12 @@ pub trait DecodeSpan<S: ErrorSpan>: Sized {
     /// This method can use some extra data (say file name) from the context.
     /// Although, by default context is empty and end users are expected to use
     /// [`parse_with_context`](crate::parse_with_context) to add some values.
-    fn decode_span(span: S, ctx: &mut Context<S>) -> Self;
+    fn decode_span(span: &S, ctx: &mut Context<S>) -> Self;
 }
 
 impl<T: ErrorSpan> DecodeSpan<T> for T {
-    fn decode_span(span: T, _: &mut Context<T>) -> Self {
-        span
+    fn decode_span(span: &T, _: &mut Context<T>) -> Self {
+        span.clone()
     }
 }
 

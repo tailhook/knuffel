@@ -5,16 +5,49 @@ use crate::definition::{Enum, VariantKind};
 use crate::node;
 
 
+pub(crate) struct Common<'a> {
+    pub object: &'a Enum,
+    pub ctx: &'a syn::Ident,
+    pub span_type: &'a TokenStream,
+}
+
 pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     let name = &e.ident;
     let node = syn::Ident::new("node", Span::mixed_site());
     let ctx = syn::Ident::new("ctx", Span::mixed_site());
-    let decode = decode(e, &node, &ctx)?;
+
+    let (_, type_gen, _) = e.generics.split_for_impl();
+    let mut common_generics = e.generics.clone();
+    let span_ty;
+    if let Some(ty) = e.trait_props.span_type.as_ref() {
+        span_ty = quote!(#ty);
+    } else {
+        if common_generics.params.is_empty() {
+            common_generics.lt_token = Some(Default::default());
+            common_generics.gt_token = Some(Default::default());
+        }
+        common_generics.params.push(syn::parse2(quote!(S)).unwrap());
+        span_ty = quote!(S);
+        common_generics.make_where_clause().predicates.push(
+            syn::parse2(quote!(S: ::knuffel::traits::Span)).unwrap());
+    };
+    let trait_gen = quote!(<#span_ty>);
+    let (impl_gen, _, bounds) = common_generics.split_for_impl();
+
+    let common = Common {
+        object: e,
+        ctx: &ctx,
+        span_type: &span_ty,
+    };
+
+    let decode = decode(&common, &node)?;
     Ok(quote! {
-        impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
-                           #ctx: &mut ::knuffel::decode::Context<S>)
-                -> Result<Self, ::knuffel::errors::DecodeError<S>>
+        impl #impl_gen ::knuffel::Decode #trait_gen for #name #type_gen
+            #bounds
+        {
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<#span_ty>,
+                           #ctx: &mut ::knuffel::decode::Context<#span_ty>)
+                -> Result<Self, ::knuffel::errors::DecodeError<#span_ty>>
             {
                 #decode
             }
@@ -22,12 +55,11 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
     })
 }
 
-fn decode(e: &Enum, node: &syn::Ident, ctx: &syn::Ident)
-    -> syn::Result<TokenStream>
-{
-    let mut branches = Vec::with_capacity(e.variants.len());
-    let enum_name = &e.ident;
-    for var in &e.variants {
+fn decode(e: &Common, node: &syn::Ident) -> syn::Result<TokenStream> {
+    let ctx = e.ctx;
+    let mut branches = Vec::with_capacity(e.object.variants.len());
+    let enum_name = &e.object.ident;
+    for var in &e.object.variants {
         let name = &var.name;
         let variant_name = &var.ident;
         match &var.kind {
@@ -84,9 +116,17 @@ fn decode(e: &Enum, node: &syn::Ident, ctx: &syn::Ident)
                 });
             }
             VariantKind::Tuple(s) => {
-                let decode = node::decode_enum_item(s,
+                let common = node::Common {
+                    object: s,
+                    ctx,
+                    span_type: e.span_type,
+                };
+                let decode = node::decode_enum_item(
+                    &common,
                     quote!(#enum_name::#variant_name),
-                    node, ctx, false)?;
+                    node,
+                    false,
+                )?;
                 branches.push(quote! {
                     #name => { #decode }
                 });
@@ -95,17 +135,17 @@ fn decode(e: &Enum, node: &syn::Ident, ctx: &syn::Ident)
         }
     }
     // TODO(tailhook) use strsim to find similar names
-    let err = if e.variants.len() <= 3 {
+    let err = if e.object.variants.len() <= 3 {
         format!("expected one of {}",
-                e.variants.iter()
+                e.object.variants.iter()
                 .map(|v| format!("`{}`", v.name.escape_default()))
                 .collect::<Vec<_>>()
                 .join(", "))
     } else {
         format!("expected `{}`, `{}`, or one of {} others",
-                e.variants[0].name.escape_default(),
-                e.variants[1].name.escape_default(),
-                e.variants.len() - 2)
+                e.object.variants[0].name.escape_default(),
+                e.object.variants[1].name.escape_default(),
+                e.object.variants.len() - 2)
     };
     Ok(quote! {
         match &**#node.node_name {

@@ -4,6 +4,13 @@ use quote::{quote, ToTokens};
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
 use crate::definition::{Child, Field, NewType, ExtraKind, ChildMode};
 
+
+pub(crate) struct Common<'a> {
+    pub object: &'a Struct,
+    pub ctx: &'a syn::Ident,
+    pub span_type: &'a TokenStream,
+}
+
 fn child_can_partial(child: &Child) -> bool {
     use ChildMode::*;
 
@@ -15,11 +22,37 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     let node = syn::Ident::new("node", Span::mixed_site());
     let ctx = syn::Ident::new("ctx", Span::mixed_site());
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(s, &node, &ctx)?;
-    let decode_props = decode_props(s, &node, &ctx)?;
-    let decode_children_normal = decode_children(s, &children, &ctx,
-                                          Some(quote!(#node.span())))?;
-    let assign_extra = assign_extra(s)?;
+
+    let (_, type_gen, _) = s.generics.split_for_impl();
+    let mut common_generics = s.generics.clone();
+    let span_ty;
+    if let Some(ty) = s.trait_props.span_type.as_ref() {
+        span_ty = quote!(#ty);
+    } else {
+        if common_generics.params.is_empty() {
+            common_generics.lt_token = Some(Default::default());
+            common_generics.gt_token = Some(Default::default());
+        }
+        common_generics.params.push(syn::parse2(quote!(S)).unwrap());
+        span_ty = quote!(S);
+        common_generics.make_where_clause().predicates.push(
+            syn::parse2(quote!(S: ::knuffel::traits::Span)).unwrap());
+    };
+    let trait_gen = quote!(<#span_ty>);
+    let (impl_gen, _, bounds) = common_generics.split_for_impl();
+
+    let common = Common {
+        object: s,
+        ctx: &ctx,
+        span_type: &span_ty,
+    };
+
+    let decode_spans = decode_spans(&common, &node)?;
+    let decode_args = decode_args(&common, &node)?;
+    let decode_props = decode_props(&common, &node)?;
+    let decode_children_normal = decode_children(
+        &common, &children, Some(quote!(#node.span())))?;
+    let assign_extra = assign_extra(&common)?;
 
     let all_fields = s.all_fields();
     let struct_val = if named {
@@ -38,7 +71,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         quote!{ #s_name(#(#assignments),*) }
     };
     let mut extra_traits = Vec::new();
-    let partial_compatible = !s.has_arguments && (
+    let partial_compatible = s.spans.is_empty() && !s.has_arguments && (
             s.properties.iter().all(|x| x.option || x.flatten) &&
             s.var_props.is_none()
         ) && (
@@ -49,40 +82,42 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         let node = syn::Ident::new("node", Span::mixed_site());
         let name = syn::Ident::new("name", Span::mixed_site());
         let value = syn::Ident::new("value", Span::mixed_site());
-        let insert_child = insert_child(s, &node, &ctx)?;
-        let insert_property = insert_property(s, &name, &value, &ctx)?;
+        let insert_child = insert_child(&common, &node)?;
+        let insert_property = insert_property(&common, &name, &value)?;
         extra_traits.push(quote! {
-            impl<S> ::knuffel::traits::DecodePartial<S> for #s_name
-                where S: ::knuffel::traits::Span,
+            impl #impl_gen ::knuffel::traits::DecodePartial #trait_gen
+                for #s_name #type_gen
+                #bounds
             {
                 fn insert_child(&mut self,
-                    #node: &::knuffel::ast::SpannedNode<S>,
-                    #ctx: &mut ::knuffel::decode::Context<S>)
-                    -> Result<bool, ::knuffel::errors::DecodeError<S>>
+                    #node: &::knuffel::ast::SpannedNode<#span_ty>,
+                    #ctx: &mut ::knuffel::decode::Context<#span_ty>)
+                    -> Result<bool, ::knuffel::errors::DecodeError<#span_ty>>
                 {
                     #insert_child
                 }
                 fn insert_property(&mut self,
-                    #name: &::knuffel::span::Spanned<Box<str>, S>,
-                    #value: &::knuffel::ast::Value<S>,
-                    #ctx: &mut ::knuffel::decode::Context<S>)
-                    -> Result<bool, ::knuffel::errors::DecodeError<S>>
+                    #name: &::knuffel::span::Spanned<Box<str>, #span_ty>,
+                    #value: &::knuffel::ast::Value<#span_ty>,
+                    #ctx: &mut ::knuffel::decode::Context<#span_ty>)
+                    -> Result<bool, ::knuffel::errors::DecodeError<#span_ty>>
                 {
                     #insert_property
                 }
             }
         });
     }
-    if !s.has_arguments && !s.has_properties {
-        let decode_children = decode_children(s, &children, &ctx, None)?;
+    if !s.has_arguments && !s.has_properties && s.spans.is_empty() {
+        let decode_children = decode_children(&common, &children, None)?;
         extra_traits.push(quote! {
-            impl<S> ::knuffel::traits::DecodeChildren<S> for #s_name
-                where S: ::knuffel::traits::Span,
+            impl #impl_gen ::knuffel::traits::DecodeChildren #trait_gen
+                for #s_name #type_gen
+                #bounds
             {
                 fn decode_children(
-                    #children: &[::knuffel::ast::SpannedNode<S>],
-                    #ctx: &mut ::knuffel::decode::Context<S>)
-                    -> Result<Self, ::knuffel::errors::DecodeError<S>>
+                    #children: &[::knuffel::ast::SpannedNode<#span_ty>],
+                    #ctx: &mut ::knuffel::decode::Context<#span_ty>)
+                    -> Result<Self, ::knuffel::errors::DecodeError<#span_ty>>
                 {
                     #decode_children
                     #assign_extra
@@ -93,11 +128,14 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
     }
     Ok(quote! {
         #(#extra_traits)*
-        impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #s_name {
-            fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
-                           #ctx: &mut ::knuffel::decode::Context<S>)
-                -> Result<Self, ::knuffel::errors::DecodeError<S>>
+        impl #impl_gen ::knuffel::Decode #trait_gen for #s_name #type_gen
+            #bounds
+        {
+            fn decode_node(#node: &::knuffel::ast::SpannedNode<#span_ty>,
+                           #ctx: &mut ::knuffel::decode::Context<#span_ty>)
+                -> Result<Self, ::knuffel::errors::DecodeError<#span_ty>>
             {
+                #decode_spans
                 #decode_args
                 #decode_props
                 let #children = #node.children.as_ref()
@@ -134,17 +172,17 @@ pub fn emit_new_type(s: &NewType) -> syn::Result<TokenStream> {
     })
 }
 
-pub fn decode_enum_item(s: &Struct,
-    s_name: impl ToTokens, node: &syn::Ident, ctx: &syn::Ident, named: bool)
+pub(crate) fn decode_enum_item(s: &Common,
+    s_name: impl ToTokens, node: &syn::Ident, named: bool)
     -> syn::Result<TokenStream>
 {
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(s, node, ctx)?;
-    let decode_props = decode_props(s, node, ctx)?;
-    let decode_children = decode_children(s, &children, ctx,
+    let decode_args = decode_args(s, node)?;
+    let decode_props = decode_props(s, node)?;
+    let decode_children = decode_children(s, &children,
                                           Some(quote!(#node.span())))?;
     let assign_extra = assign_extra(s)?;
-    let all_fields = s.all_fields();
+    let all_fields = s.object.all_fields();
     let struct_val = if named {
         let assignments = all_fields.iter()
             .map(|f| f.as_assign_pair().unwrap());
@@ -263,15 +301,30 @@ fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode,
     }
 }
 
-fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
+fn decode_spans(s: &Common, node: &syn::Ident)
     -> syn::Result<TokenStream>
 {
+    let ctx = s.ctx;
+    let spans = s.object.spans.iter().flat_map(|span| {
+        let fld = &span.field.tmp_name;
+        quote! {
+            let #fld = ::knuffel::traits::DecodeSpan::decode_span(
+                #node.span(),
+                #ctx,
+            );
+        }
+    });
+    Ok(quote! { #(#spans)* })
+}
+
+fn decode_args(s: &Common, node: &syn::Ident) -> syn::Result<TokenStream> {
+    let ctx = s.ctx;
     let mut decoder = Vec::new();
     let iter_args = syn::Ident::new("iter_args", Span::mixed_site());
     decoder.push(quote! {
         let mut #iter_args = #node.arguments.iter();
     });
-    for arg in &s.arguments {
+    for arg in &s.object.arguments {
         let fld = &arg.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
         let decode_value = decode_value(&val, ctx, &arg.decode,
@@ -315,7 +368,7 @@ fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
             }
         }
     }
-    if let Some(var_args) = &s.var_args {
+    if let Some(var_args) = &s.object.var_args {
         let fld = &var_args.field.tmp_name;
         let val = syn::Ident::new("val", Span::mixed_site());
         let decode_value = decode_value(&val, ctx, &var_args.decode, false)?;
@@ -336,18 +389,19 @@ fn decode_args(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     Ok(quote! { #(#decoder)* })
 }
 
-fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
+fn decode_props(s: &Common, node: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let mut declare_empty = Vec::new();
     let mut match_branches = Vec::new();
     let mut postprocess = Vec::new();
 
+    let ctx = s.ctx;
     let val = syn::Ident::new("val", Span::mixed_site());
     let name = syn::Ident::new("name", Span::mixed_site());
     let name_str = syn::Ident::new("name_str", Span::mixed_site());
 
-    for prop in &s.properties {
+    for prop in &s.object.properties {
         let fld = &prop.field.tmp_name;
         let prop_name = &prop.name;
         let seen_name = syn::Ident::new(&format!("seen_{}", fld),
@@ -410,7 +464,7 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
             }
         }
     }
-    if let Some(var_props) = &s.var_props {
+    if let Some(var_props) = &s.object.var_props {
         let fld = &var_props.field.tmp_name;
         let decode_value = decode_value(&val, ctx, &var_props.decode, false)?;
         declare_empty.push(quote! {
@@ -452,25 +506,34 @@ fn decode_props(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     })
 }
 
-fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs,
-             ctx: &syn::Ident)
+fn unwrap_fn(parent: &Common,
+             func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs)
     -> syn::Result<TokenStream>
 {
+    let ctx = parent.ctx;
+    let span_ty = parent.span_type;
     let mut bld = StructBuilder::new(
         syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
+        parent.object.trait_props.clone(),
+        parent.object.generics.clone(),
     );
     bld.add_field(Field::new_named(name), false, false, attrs)?;
-    let s = bld.build();
+    let object = bld.build();
+    let common = Common {
+        object: &object,
+        ctx: parent.ctx,
+        span_type: parent.span_type,
+    };
 
     let node = syn::Ident::new("node", Span::mixed_site());
     let children = syn::Ident::new("children", Span::mixed_site());
-    let decode_args = decode_args(&s, &node, ctx)?;
-    let decode_props = decode_props(&s, &node, ctx)?;
-    let decode_children = decode_children(&s, &children, ctx,
+    let decode_args = decode_args(&common, &node)?;
+    let decode_props = decode_props(&common, &node)?;
+    let decode_children = decode_children(&common, &children,
                                           Some(quote!(#node.span())))?;
     Ok(quote! {
-        let mut #func = |#node: &::knuffel::ast::SpannedNode<S>,
-                         #ctx: &mut ::knuffel::decode::Context<S>|
+        let mut #func = |#node: &::knuffel::ast::SpannedNode<#span_ty>,
+                         #ctx: &mut ::knuffel::decode::Context<#span_ty>|
         {
             #decode_args
             #decode_props
@@ -483,10 +546,11 @@ fn unwrap_fn(func: &syn::Ident, name: &syn::Ident, attrs: &FieldAttrs,
     })
 }
 
-fn decode_node(child_def: &Child, in_partial: bool,
-               child: &syn::Ident, ctx: &syn::Ident)
+fn decode_node(common: &Common, child_def: &Child, in_partial: bool,
+               child: &syn::Ident)
     -> syn::Result<TokenStream>
 {
+    let ctx = common.ctx;
     let fld = &child_def.field.tmp_name;
     let dest = if in_partial {
         child_def.field.from_self()
@@ -496,7 +560,7 @@ fn decode_node(child_def: &Child, in_partial: bool,
     let (init, func) = if let ChildMode::Unwrap(inner) = &child_def.mode {
         let func = syn::Ident::new(&format!("unwrap_{}", fld),
                                    Span::mixed_site());
-        let unwrap_fn = unwrap_fn(&func, fld, inner, ctx)?;
+        let unwrap_fn = unwrap_fn(common, &func, fld, inner)?;
         (unwrap_fn, quote!(#func))
     } else {
         (quote!(), quote!(::knuffel::Decode::decode_node))
@@ -532,11 +596,10 @@ fn decode_node(child_def: &Child, in_partial: bool,
     }
 }
 
-fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
-    -> syn::Result<TokenStream>
-{
-    let mut match_branches = Vec::with_capacity(s.children.len());
-    for child_def in &s.children {
+fn insert_child(s: &Common, node: &syn::Ident) -> syn::Result<TokenStream> {
+    let ctx = s.ctx;
+    let mut match_branches = Vec::with_capacity(s.object.children.len());
+    for child_def in &s.object.children {
         let dest = &child_def.field.from_self();
         let child_name = &child_def.name;
         if matches!(child_def.mode, ChildMode::Flatten) {
@@ -564,7 +627,7 @@ fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
         } else {
             let dup_err = format!("duplicate node `{}`, single node expected",
                                   child_name.escape_default());
-            let decode = decode_node(&child_def, true, node, ctx)?;
+            let decode = decode_node(s, &child_def, true, node)?;
             match_branches.push(quote! {
                 #child_name => {
                     if #dest.is_some() {
@@ -585,12 +648,12 @@ fn insert_child(s: &Struct, node: &syn::Ident, ctx: &syn::Ident)
     })
 }
 
-fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident,
-                   ctx: &syn::Ident)
+fn insert_property(s: &Common, name: &syn::Ident, value: &syn::Ident)
     -> syn::Result<TokenStream>
 {
-    let mut match_branches = Vec::with_capacity(s.children.len());
-    for prop in &s.properties {
+    let ctx = s.ctx;
+    let mut match_branches = Vec::with_capacity(s.object.children.len());
+    for prop in &s.object.properties {
         let dest = &prop.field.from_self();
         let prop_name = &prop.name;
         if prop.flatten {
@@ -627,7 +690,7 @@ fn insert_property(s: &Struct, name: &syn::Ident, value: &syn::Ident,
     })
 }
 
-fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
+fn decode_children(s: &Common, children: &syn::Ident,
                    err_span: Option<TokenStream>)
     -> syn::Result<TokenStream>
 {
@@ -635,9 +698,10 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
     let mut match_branches = Vec::new();
     let mut postprocess = Vec::new();
 
+    let ctx = s.ctx;
     let child = syn::Ident::new("child", Span::mixed_site());
     let name_str = syn::Ident::new("name_str", Span::mixed_site());
-    for child_def in &s.children {
+    for child_def in &s.object.children {
         let fld = &child_def.field.tmp_name;
         let child_name = &child_def.name;
         match child_def.mode {
@@ -661,7 +725,7 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
                 declare_empty.push(quote! {
                     let mut #fld = Vec::new();
                 });
-                let decode = decode_node(&child_def, false, &child, ctx)?;
+                let decode = decode_node(s, &child_def, false, &child)?;
                 match_branches.push(quote! {
                     #child_name => #decode,
                 });
@@ -709,7 +773,7 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
                 let dup_err = format!(
                     "duplicate node `{}`, single node expected",
                     child_name.escape_default());
-                let decode = decode_node(&child_def, false, &child, ctx)?;
+                let decode = decode_node(s, &child_def, false, &child)?;
                 match_branches.push(quote! {
                     #child_name => {
                         if #fld.is_some() {
@@ -776,7 +840,7 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
             }
         }
     }
-    if let Some(var_children) = &s.var_children {
+    if let Some(var_children) = &s.object.var_children {
         let fld = &var_children.field.tmp_name;
         match_branches.push(quote! {
             _ => {
@@ -818,8 +882,8 @@ fn decode_children(s: &Struct, children: &syn::Ident, ctx: &syn::Ident,
     }
 }
 
-fn assign_extra(s: &Struct) -> syn::Result<TokenStream> {
-    let items = s.extra_fields.iter().map(|fld| {
+fn assign_extra(s: &Common) -> syn::Result<TokenStream> {
+    let items = s.object.extra_fields.iter().map(|fld| {
         match fld.kind {
             ExtraKind::Auto => {
                 let name = &fld.field.tmp_name;

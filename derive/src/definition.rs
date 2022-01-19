@@ -1,4 +1,7 @@
+use std::mem;
+
 use proc_macro2::{TokenStream, Span};
+use proc_macro_error::emit_error;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -34,6 +37,7 @@ pub enum FieldMode {
     Children { name: Option<String> },
     Child,
     Flatten(Flatten),
+    Span,
 }
 
 pub enum FlattenItem {
@@ -61,6 +65,7 @@ pub enum Attr {
     FieldMode(FieldMode),
     Unwrap(FieldAttrs),
     Default(Option<syn::Expr>),
+    SpanType(syn::Type),
 }
 
 #[derive(Debug, Clone)]
@@ -74,12 +79,8 @@ pub struct FieldAttrs {
 #[derive(Debug, Clone)]
 pub struct VariantAttrs {
     pub skip: bool,
-    pub inner: StructAttrs,
 }
 
-#[derive(Debug, Clone)]
-pub struct StructAttrs {
-}
 
 #[derive(Clone)]
 pub enum AttrAccess {
@@ -92,6 +93,10 @@ pub struct Field {
     pub span: Span,
     pub attr: AttrAccess,
     pub tmp_name: syn::Ident,
+}
+
+pub struct SpanField {
+    pub field: Field,
 }
 
 pub struct Arg {
@@ -151,8 +156,16 @@ pub struct ExtraField {
     pub option: bool,
 }
 
+#[derive(Clone)]
+pub struct TraitProps {
+    pub span_type: Option<syn::Type>,
+}
+
 pub struct Struct {
     pub ident: syn::Ident,
+    pub trait_props: TraitProps,
+    pub generics: syn::Generics,
+    pub spans: Vec<SpanField>,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -166,6 +179,9 @@ pub struct Struct {
 
 pub struct StructBuilder {
     pub ident: syn::Ident,
+    pub trait_props: TraitProps,
+    pub generics: syn::Generics,
+    pub spans: Vec<SpanField>,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -177,6 +193,8 @@ pub struct StructBuilder {
 
 pub struct NewType {
     pub ident: syn::Ident,
+    pub trait_props: TraitProps,
+    pub generics: syn::Generics,
     pub option: bool,
 }
 
@@ -188,9 +206,27 @@ pub struct Variant {
 
 pub struct Enum {
     pub ident: syn::Ident,
+    pub trait_props: TraitProps,
+    pub generics: syn::Generics,
     pub variants: Vec<Variant>,
 }
 
+impl TraitProps {
+    fn pick_from(attrs: &mut Vec<(Attr, Span)>) -> TraitProps {
+        let mut props = TraitProps {
+            span_type: None,
+        };
+        for attr in mem::replace(attrs, Vec::new()) {
+            match attr.0 {
+                Attr::SpanType(ty) => {
+                    props.span_type = Some(ty);
+                }
+                _ => attrs.push(attr),
+            }
+        }
+        return props;
+    }
+}
 
 fn err_pair(s1: &Field, s2: &Field, t1: &str, t2: &str)
     -> syn::Error
@@ -234,34 +270,41 @@ impl Variant {
 }
 
 impl Enum {
-    fn new(ident: syn::Ident, _attrs: Vec<syn::Attribute>,
+    fn new(ident: syn::Ident, attrs: Vec<syn::Attribute>,
+           generics: syn::Generics,
            src_variants: impl Iterator<Item=syn::Variant>)
         -> syn::Result<Self>
     {
+        let mut attrs = parse_attr_list(&attrs);
+        let trait_props = TraitProps::pick_from(&mut attrs);
+        if !attrs.is_empty() {
+            for (_, span) in attrs {
+                emit_error!(span, "unexpected container attribute");
+            }
+        }
+
         let mut variants = Vec::new();
         for var in src_variants {
             let mut attrs = VariantAttrs::new();
-            for attr in var.attrs {
-                if matches!(attr.style, syn::AttrStyle::Outer) &&
-                    attr.path.is_ident("knuffel")
-
-                {
-                    let chunk = attr.parse_args_with(parse_attrs)?;
-                    attrs.update(chunk)?;
-                }
-            }
+            attrs.update(parse_attr_list(&var.attrs));
             if attrs.skip {
                 continue;
             }
             let kind = match var.fields {
                 syn::Fields::Named(n) => {
-                    Struct::new(var.ident.clone(), &attrs.inner,
+                    Struct::new(var.ident.clone(),
+                                trait_props.clone(),
+                                generics.clone(),
                                 n.named.into_iter())
                     .map(VariantKind::Named)?
                 }
                 syn::Fields::Unnamed(u) => {
-                    let tup = Struct::new(var.ident.clone(), &attrs.inner,
-                                          u.unnamed.into_iter())?;
+                    let tup = Struct::new(
+                        var.ident.clone(),
+                        trait_props.clone(),
+                        generics.clone(),
+                        u.unnamed.into_iter(),
+                    )?;
                     if tup.all_fields().len() == 1
                         && tup.extra_fields.len() == 1
                         && matches!(tup.extra_fields[0].kind, ExtraKind::Auto)
@@ -284,15 +327,24 @@ impl Enum {
         }
         Ok(Enum {
             ident,
+            trait_props,
+            generics,
             variants,
         })
     }
 }
 
 impl StructBuilder {
-    pub fn new(ident: syn::Ident) -> Self {
+    pub fn new(ident: syn::Ident,
+               trait_props: TraitProps,
+               generics: syn::Generics)
+        -> Self
+    {
         StructBuilder {
             ident,
+            trait_props,
+            generics,
+            spans: Vec::new(),
             arguments: Vec::new(),
             var_args: None::<VarArgs>,
             properties: Vec::new(),
@@ -305,6 +357,9 @@ impl StructBuilder {
     pub fn build(self) -> Struct {
         Struct {
             ident: self.ident,
+            trait_props: self.trait_props,
+            generics: self.generics,
+            spans: self.spans,
             has_arguments:
                 !self.arguments.is_empty() || self.var_args.is_some(),
             has_properties:
@@ -474,6 +529,9 @@ impl StructBuilder {
                     });
                 }
             }
+            Some(FieldMode::Span) => {
+                self.spans.push(SpanField { field });
+            }
             None => {
                 self.extra_fields.push(ExtraField {
                     field,
@@ -487,22 +545,14 @@ impl StructBuilder {
 }
 
 impl Struct {
-    fn new(ident: syn::Ident, _attrs: &StructAttrs,
+    fn new(ident: syn::Ident, trait_props: TraitProps, generics: syn::Generics,
            fields: impl Iterator<Item=syn::Field>)
         -> syn::Result<Self>
     {
-        let mut bld = StructBuilder::new(ident);
+        let mut bld = StructBuilder::new(ident, trait_props, generics);
         for (idx, fld) in fields.enumerate() {
             let mut attrs = FieldAttrs::new();
-            for attr in &fld.attrs {
-                if matches!(attr.style, syn::AttrStyle::Outer) &&
-                    attr.path.is_ident("knuffel")
-
-                {
-                    let chunk = attr.parse_args_with(parse_attrs)?;
-                    attrs.update(chunk)?;
-                }
-            }
+            attrs.update(parse_attr_list(&fld.attrs));
             let field = Field::new(&fld, idx);
             bld.add_field(field, is_option(&fld.ty), is_bool(&fld.ty), &attrs)?;
         }
@@ -511,6 +561,7 @@ impl Struct {
     }
     pub fn all_fields(&self) -> Vec<&Field> {
         let mut res = Vec::new();
+        res.extend(self.spans.iter().map(|a| &a.field));
         res.extend(self.arguments.iter().map(|a| &a.field));
         res.extend(self.var_args.iter().map(|a| &a.field));
         res.extend(self.properties.iter().map(|p| &p.field));
@@ -532,22 +583,36 @@ impl Parse for Definition {
         if lookahead.peek(syn::Token![struct]) {
             let item: syn::ItemStruct = input.parse()?;
             attrs.extend(item.attrs);
-            // TODO(tailhook) parse struct attrs
-            let attrs = StructAttrs {};
+
+            let mut attrs = parse_attr_list(&attrs);
+            let trait_props = TraitProps::pick_from(&mut attrs);
+            if !attrs.is_empty() {
+                for (_, span) in attrs {
+                    emit_error!(span, "unexpected container attribute");
+                }
+            }
+
             match item.fields {
                 syn::Fields::Named(n) => {
-                    Struct::new(item.ident, &attrs, n.named.into_iter())
+                    Struct::new(item.ident, trait_props, item.generics,
+                                n.named.into_iter())
                     .map(Definition::Struct)
                 }
                 syn::Fields::Unnamed(u) => {
-                    let tup = Struct::new(item.ident.clone(), &attrs,
-                                          u.unnamed.into_iter())?;
+                    let tup = Struct::new(
+                        item.ident.clone(),
+                        trait_props.clone(),
+                        item.generics.clone(),
+                        u.unnamed.into_iter(),
+                    )?;
                     if tup.all_fields().len() == 1
                         && tup.extra_fields.len() == 1
                         && matches!(tup.extra_fields[0].kind, ExtraKind::Auto)
                     {
                         Ok(Definition::NewType(NewType {
                             ident: item.ident,
+                            trait_props,
+                            generics: item.generics,
                             option: tup.extra_fields[0].option,
                         }))
                     } else {
@@ -555,14 +620,15 @@ impl Parse for Definition {
                     }
                 }
                 syn::Fields::Unit => {
-                    Struct::new(item.ident, &attrs, Vec::new().into_iter())
+                    Struct::new(item.ident, trait_props, item.generics,
+                                Vec::new().into_iter())
                     .map(Definition::UnitStruct)
                 }
             }
         } else if lookahead.peek(syn::Token![enum]) {
             let item: syn::ItemEnum = input.parse()?;
             attrs.extend(item.attrs);
-            Enum::new(item.ident, attrs,
+            Enum::new(item.ident, attrs, item.generics,
                       item.variants.into_iter())
                 .map(Definition::Enum)
         } else {
@@ -580,49 +646,45 @@ impl FieldAttrs {
             default: None,
         }
     }
-    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
-        -> syn::Result<()>
-    {
+    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>) {
         use Attr::*;
 
         for (attr, span) in attrs {
             match attr {
                 FieldMode(mode) => {
                     if self.mode.is_some() {
-                        return Err(syn::Error::new(span,
+                        emit_error!(span,
                             "only single attribute that defines mode of the \
-                            field is allowed. Perhaps you mean `unwrap`?"));
+                            field is allowed. Perhaps you mean `unwrap`?");
                     }
                     self.mode = Some(mode);
                 }
                 Unwrap(val) => {
                     if self.unwrap.is_some() {
-                        return Err(syn::Error::new(span,
-                            "`unwrap` specified twice"));
+                        emit_error!(span, "`unwrap` specified twice");
                     }
                     self.unwrap = Some(Box::new(val));
                 }
                 DecodeMode(mode) => {
                     if self.decode.is_some() {
-                        return Err(syn::Error::new(span,
+                        emit_error!(span,
                             "only single attribute that defines parser of the \
-                            field is allowed"));
+                            field is allowed");
                     }
                     self.decode = Some(mode);
 
                 }
                 Default(value) => {
                     if self.default.is_some() {
-                        return Err(syn::Error::new(span,
-                            "only single default is allowed"));
+                        emit_error!(span,
+                            "only single default is allowed");
                     }
                     self.default = Some(value);
                 }
-                _ => return Err(syn::Error::new(span,
-                    "this attribute is not supported on fields")),
+                _ => emit_error!(span,
+                    "this attribute is not supported on fields"),
             }
         }
-        Ok(())
     }
 }
 
@@ -630,23 +692,34 @@ impl VariantAttrs {
     fn new() -> VariantAttrs {
         VariantAttrs {
             skip: false,
-            inner: StructAttrs {},
         }
     }
-    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>)
-        -> syn::Result<()>
-    {
+    fn update(&mut self, attrs: impl IntoIterator<Item=(Attr, Span)>) {
         use Attr::*;
 
         for (attr, span) in attrs {
             match attr {
                 Skip => self.skip = true,
-                _ => return Err(syn::Error::new(span,
-                    "this attribute is not supported on enum variants")),
+                _ => emit_error!(span, "not supported on enum variants"),
             }
         }
-        Ok(())
     }
+}
+
+fn parse_attr_list(attrs: &[syn::Attribute]) -> Vec<(Attr, Span)> {
+    let mut all = Vec::new();
+    for attr in attrs {
+        if matches!(attr.style, syn::AttrStyle::Outer) &&
+            attr.path.is_ident("knuffel")
+
+        {
+            match attr.parse_args_with(parse_attrs) {
+                Ok(attrs) => all.extend(attrs),
+                Err(e) => emit_error!(e),
+            }
+        }
+    }
+    return all;
 }
 
 fn parse_attrs(input: ParseStream)
@@ -714,7 +787,7 @@ impl Attr {
             syn::parenthesized!(parens in input);
             let mut attrs = FieldAttrs::new();
             let chunk = parens.call(parse_attrs)?;
-            attrs.update(chunk)?;
+            attrs.update(chunk);
             Ok(Attr::Unwrap(attrs))
         } else if lookahead.peek(kw::skip) {
             let _kw: kw::skip = input.parse()?;
@@ -751,6 +824,14 @@ impl Attr {
             } else {
                 Ok(Attr::Default(None))
             }
+        } else if lookahead.peek(kw::span) {
+            let _kw: kw::span = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::Span))
+        } else if lookahead.peek(kw::span_type) {
+            let _kw: kw::span_type = input.parse()?;
+            let _eq: syn::Token![=] = input.parse()?;
+            let ty: syn::Type = input.parse()?;
+            Ok(Attr::SpanType(ty))
         } else {
             Err(lookahead.error())
         }

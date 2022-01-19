@@ -480,24 +480,27 @@ fn line_space<S: Span>() -> impl Parser<char, (), Error=Error<S>> {
 fn nodes<S: Span>() -> impl Parser<char, Vec<SpannedNode<S>>, Error=Error<S>> {
     use PropOrArg::*;
     recursive(|nodes: chumsky::recursive::Recursive<char, _, Error<S>>| {
-        let braced_nodes = nodes
-            .delimited_by(just('{'), just('}'))
-            .map_err_with_span(|e, span| {
-                if matches!(&e, Error::Unexpected { found: TokenFormat::Eoi, .. })
-                {
-                    e.merge(Error::Unclosed {
-                        label: "curly braces",
-                        // we know it's `{` at the start of the span
-                        opened_at: span.at_start(1),
-                        opened: '{'.into(),
-                        expected_at: span.at_end(),
-                        expected: '}'.into(),
-                        found: None.into(),
-                    })
-                } else {
-                    e
-                }
-            });
+        let braced_nodes =
+            just('{')
+            .ignore_then(nodes
+                .then_ignore(just('}'))
+                .map_err_with_span(|e, span| {
+                    if matches!(&e, Error::Unexpected {
+                        found: TokenFormat::Eoi, .. })
+                    {
+                        e.merge(Error::Unclosed {
+                            label: "curly braces",
+                            // we know it's `{` at the start of the span
+                            opened_at: span.before_start(1),
+                            opened: '{'.into(),
+                            expected_at: span.at_end(),
+                            expected: '}'.into(),
+                            found: None.into(),
+                        })
+                    } else {
+                        e
+                    }
+                }));
 
         let node = spanned(type_name()).or_not()
             .then(spanned(ident()))
@@ -513,7 +516,7 @@ fn nodes<S: Span>() -> impl Parser<char, Vec<SpannedNode<S>>, Error=Error<S>> {
                                .or_not())
                   .then(spanned(braced_nodes))
                   .or_not())
-            .then_ignore(node_terminator())
+            .then_ignore(node_space().repeated().then(node_terminator()))
             .map(|(((type_name, node_name), line_items), opt_children)| {
                 let mut node = Node {
                     type_name,
@@ -1067,14 +1070,14 @@ mod test {
         }"#);
     }
 
+    fn single<T, E: std::fmt::Debug>(r: Result<Vec<T>, E>) -> T {
+        let mut v = r.unwrap();
+        assert_eq!(v.len(), 1);
+        v.remove(0)
+    }
+
     #[test]
     fn parse_node() {
-        fn single<T, E: std::fmt::Debug>(r: Result<Vec<T>, E>) -> T {
-            let mut v = r.unwrap();
-            assert_eq!(v.len(), 1);
-            v.remove(0)
-        }
-
         let nval = single(parse(nodes(), "hello"));
         assert_eq!(nval.node_name.as_ref(), "hello");
         assert_eq!(nval.type_name.as_ref(), None);
@@ -1205,7 +1208,25 @@ mod test {
         let nval = single(parse(nodes(), "parent /-{\nchild\n}"));
         assert_eq!(nval.node_name.as_ref(), "parent");
         assert_eq!(nval.children().len(), 0);
+    }
 
+    #[test]
+    fn parse_node_whitespace() {
+        let nval = single(parse(nodes(), "hello  {   }"));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = single(parse(nodes(), "hello  {   }  "));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = single(parse(nodes(), "hello "));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
+
+        let nval = single(parse(nodes(), "hello   "));
+        assert_eq!(nval.node_name.as_ref(), "hello");
+        assert_eq!(nval.type_name.as_ref(), None);
     }
 
     #[test]

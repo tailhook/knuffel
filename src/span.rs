@@ -252,6 +252,15 @@ impl traits::sealed::Sealed for LineSpan {
 #[cfg(feature="line-numbers")]
 impl traits::Span for LineSpan {}
 
+#[cfg(feature="line-numbers")]
+impl traits::DecodeSpan<LineSpan> for Span {
+    fn decode_span(span: &LineSpan, _: &mut crate::decode::Context<LineSpan>)
+        -> Self
+    {
+        Span(span.0.offset, span.1.offset)
+    }
+}
+
 impl<T, S> Spanned<T, S> {
     /// Converts value but keeps the same span attached
     pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Spanned<R, S> {
