@@ -73,3 +73,32 @@ impl<S, T> DecodeScalar<S> for Value<T>
         })
     }
 }
+
+impl<S> DecodeScalar<S> for Literal
+    where S: Span,
+{
+    fn type_check(_type_name: &Option<Spanned<TypeName, S>>,
+                  _ctx: &mut Context<S>)
+    {
+    }
+    fn raw_decode(value: &Spanned<Literal, S>, _ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        Ok((**value).clone())
+    }
+}
+
+impl<S, T> DecodeScalar<S> for Spanned<Literal, T>
+    where S: Span,
+          T: DecodeSpan<S>
+{
+    fn type_check(_type_name: &Option<Spanned<TypeName, S>>,
+                  _ctx: &mut Context<S>)
+    {
+    }
+    fn raw_decode(value: &Spanned<Literal, S>, ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        Ok(value.clone_as(ctx))
+    }
+}
