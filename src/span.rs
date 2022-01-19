@@ -15,6 +15,7 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::traits;
+use crate::decode::Context;
 
 /// Reexport of [miette::SourceSpan] trait that we use for parsing
 pub use miette::SourceSpan as ErrorSpan;
@@ -254,7 +255,7 @@ impl traits::Span for LineSpan {}
 
 #[cfg(feature="line-numbers")]
 impl traits::DecodeSpan<LineSpan> for Span {
-    fn decode_span(span: &LineSpan, _: &mut crate::decode::Context<LineSpan>)
+    fn decode_span(span: &LineSpan, _: &mut Context<LineSpan>)
         -> Self
     {
         Span(span.0.offset, span.1.offset)
@@ -267,6 +268,23 @@ impl<T, S> Spanned<T, S> {
         Spanned {
             span: self.span,
             value: f(self.value),
+        }
+    }
+    /// Converts span but keeps the same value attached
+    pub fn map_span<U>(self, f: impl FnOnce(S) -> U) -> Spanned<T, U> {
+        Spanned {
+            span: f(self.span),
+            value: self.value,
+        }
+    }
+    pub(crate) fn clone_as<U>(&self, ctx: &mut Context<S>) -> Spanned<T, U>
+        where U: traits::DecodeSpan<S>,
+              T: Clone,
+              S: traits::ErrorSpan,
+    {
+        Spanned {
+            span: traits::DecodeSpan::decode_span(&self.span, ctx),
+            value: self.value.clone(),
         }
     }
 }

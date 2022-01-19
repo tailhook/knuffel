@@ -4,6 +4,7 @@
 
 mod containers;
 mod convert;
+mod convert_ast;
 mod grammar;
 mod wrappers;
 
