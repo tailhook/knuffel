@@ -47,7 +47,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         span_type: &span_ty,
     };
 
-    let decode_spans = decode_spans(&common, &node)?;
+    let decode_specials = decode_specials(&common, &node)?;
     let decode_args = decode_args(&common, &node)?;
     let decode_props = decode_props(&common, &node)?;
     let decode_children_normal = decode_children(
@@ -71,7 +71,10 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         quote!{ #s_name(#(#assignments),*) }
     };
     let mut extra_traits = Vec::new();
-    let partial_compatible = s.spans.is_empty() && !s.has_arguments && (
+    let partial_compatible = s.spans.is_empty() &&
+        s.node_names.is_empty() &&
+        s.type_names.is_empty() &&
+        !s.has_arguments && (
             s.properties.iter().all(|x| x.option || x.flatten) &&
             s.var_props.is_none()
         ) && (
@@ -107,7 +110,9 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
             }
         });
     }
-    if !s.has_arguments && !s.has_properties && s.spans.is_empty() {
+    if !s.has_arguments && !s.has_properties &&
+        s.spans.is_empty() && s.node_names.is_empty() && s.type_names.is_empty()
+    {
         let decode_children = decode_children(&common, &children, None)?;
         extra_traits.push(quote! {
             impl #impl_gen ::knuffel::traits::DecodeChildren #trait_gen
@@ -135,7 +140,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
                            #ctx: &mut ::knuffel::decode::Context<#span_ty>)
                 -> Result<Self, ::knuffel::errors::DecodeError<#span_ty>>
             {
-                #decode_spans
+                #decode_specials
                 #decode_args
                 #decode_props
                 let #children = #node.children.as_ref()
@@ -301,7 +306,7 @@ fn decode_value(val: &syn::Ident, ctx: &syn::Ident, mode: &DecodeMode,
     }
 }
 
-fn decode_spans(s: &Common, node: &syn::Ident)
+fn decode_specials(s: &Common, node: &syn::Ident)
     -> syn::Result<TokenStream>
 {
     let ctx = s.ctx;
@@ -314,7 +319,60 @@ fn decode_spans(s: &Common, node: &syn::Ident)
             );
         }
     });
-    Ok(quote! { #(#spans)* })
+    let node_names = s.object.node_names.iter().flat_map(|node_name| {
+        let fld = &node_name.field.tmp_name;
+        quote! {
+            let #fld = #node.node_name.parse()
+                .map_err(|e| {
+                    ::knuffel::errors::DecodeError::conversion(
+                        &#node.node_name, e)
+                })?;
+        }
+    });
+    let type_names = s.object.type_names.iter().flat_map(|type_name| {
+        let fld = &type_name.field.tmp_name;
+        if type_name.option {
+            quote! {
+                let #fld = #node.type_name.as_ref().map(|tn| {
+                    tn.as_str()
+                        .parse()
+                        .map_err(|e| {
+                            ::knuffel::errors::DecodeError::conversion(tn, e)
+                        })
+                }).transpose()?;
+            }
+        } else {
+            quote! {
+                let #fld = if let Some(tn) = #node.type_name.as_ref() {
+                    tn.as_str()
+                        .parse()
+                        .map_err(|e| {
+                            ::knuffel::errors::DecodeError::conversion(tn, e)
+                        })?
+                } else {
+                    return Err(::knuffel::errors::DecodeError::missing(
+                        #node, "type name required"));
+                };
+            }
+        }
+    });
+    let validate_type = if s.object.type_names.is_empty() {
+        Some(quote! {
+            if let Some(type_name) = &#node.type_name {
+                #ctx.emit_error(::knuffel::errors::DecodeError::unexpected(
+                            type_name, "type name",
+                            "no type name expected for this node"));
+            }
+        })
+    } else {
+        None
+    };
+    Ok(quote! {
+        #(#spans)*
+        #(#node_names)*
+        #(#type_names)*
+        #validate_type
+    })
 }
 
 fn decode_args(s: &Common, node: &syn::Ident) -> syn::Result<TokenStream> {

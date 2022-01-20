@@ -607,6 +607,69 @@ implemented for the strucutures that can be used with the `flatten` attribute.
 
 # Special Values
 
+## Type Name
+
+Here is the example of the node with the type name (the name in parens):
+```kdl
+(text)document name="New Document" { }
+```
+
+By default knuffel doesn't allow type names for nodes as these are quite rare.
+
+To allow type names on specific node and to have the name stored use
+`type_name` attribute:
+```rust
+#[derive(knuffel::Decode)]
+struct Node {
+    #[knuffel(type_name)]
+    type_name: String,
+}
+```
+Type name can be optional.
+
+The field that is a target of `type_name` can be any type that implements
+`FromStr`. This might be used to validate node type:
+```rust
+pub enum PluginType {
+    Builtin,
+    External,
+}
+
+impl std::str::FromStr for PluginType {
+    type Err = Box<dyn std::error::Error + Send + Sync + 'static>;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "builtin" => Ok(PluginType::Builtin),
+            "external" => Ok(PluginType::External),
+            _ => Err("Plugin type name must be `builtin` or `external`")?,
+        }
+    }
+}
+
+#[derive(knuffel::Decode)]
+struct Node {
+    #[knuffel(type_name)]
+    type_name: PluginType,
+}
+```
+
+## Node Name
+
+In knuffel, it's common that parent node, document or enum type checks the node name of the node, and node name is not stored or validated in the strucuture.
+
+But for the cases where you need it, it's possible to store too:
+```rust
+#[derive(knuffel::Decode)]
+struct Node {
+    #[knuffel(node_name)]
+    node_name: String,
+}
+```
+
+You can use any type that implements `FromStr` to validate node name. Similarly to the example in the [type names](#type-name) section.
+
+Node name always exists so optional node_name is not supported.
+
 ## Spans
 
 The following definition:

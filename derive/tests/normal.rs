@@ -196,9 +196,12 @@ fn parse_arg1() {
                Arg1 { name: "hello".into() } );
     assert_eq!(parse_err::<Arg1>(r#"node "hello" "world""#),
         "unexpected argument");
+    assert_eq!(parse_err::<Arg1>(r#"(some)node "hello""#),
+        "no type name expected for this node");
     assert_eq!(parse_err::<Arg1>(r#"node"#),
         "additional argument `name` is required");
 }
+
 
 #[test]
 fn parse_arg_default() {

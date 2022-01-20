@@ -11,9 +11,11 @@
 //! priting matters (i.e. you log source spans). In that case, span should
 //! contain line and column numbers for things, use
 //! [`LineSpan`](crate::span::LineSpan) for that.
-use std::fmt;
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::fmt;
+use std::str::FromStr;
 
 use crate::span::Spanned;
 
@@ -154,21 +156,11 @@ impl BuiltinType {
 }
 
 impl TypeName {
-    // TODO(tailhook) for public API check identifier for validness
     pub(crate) fn from_string(val: Box<str>) -> TypeName {
-        use BuiltinType::*;
         use TypeNameInner::*;
 
-        match &val[..] {
-            "u8" => TypeName(Builtin(U8)),
-            "i8" => TypeName(Builtin(I8)),
-            "u16" => TypeName(Builtin(U16)),
-            "i16" => TypeName(Builtin(I16)),
-            "u32" => TypeName(Builtin(U32)),
-            "i32" => TypeName(Builtin(I32)),
-            "u64" => TypeName(Builtin(U64)),
-            "i64" => TypeName(Builtin(I64)),
-            "base64" => TypeName(Builtin(Base64)),
+        match BuiltinType::from_str(&val[..]) {
+            Ok(b) => TypeName(Builtin(b)),
             _ => TypeName(Custom(val)),
         }
     }
@@ -189,6 +181,36 @@ impl TypeName {
         match &self.0 {
             TypeNameInner::Builtin(t) => Some(t),
             TypeNameInner::Custom(_) => None,
+        }
+    }
+}
+
+impl FromStr for BuiltinType {
+    type Err = ();
+    fn from_str(s: &str) -> Result<BuiltinType, ()> {
+        use BuiltinType::*;
+        match s {
+            "u8" => Ok(U8),
+            "i8" => Ok(I8),
+            "u16" => Ok(U16),
+            "i16" => Ok(I16),
+            "u32" => Ok(U32),
+            "i32" => Ok(I32),
+            "u64" => Ok(U64),
+            "i64" => Ok(I64),
+            "base64" => Ok(Base64),
+            _ => Err(())
+        }
+    }
+}
+
+impl FromStr for TypeName {
+    type Err = Infallible;
+    fn from_str(s: &str) -> Result<TypeName, Infallible> {
+        use TypeNameInner::*;
+        match BuiltinType::from_str(s) {
+            Ok(b) => Ok(TypeName(Builtin(b))),
+            Err(()) => Ok(TypeName(Custom(s.into()))),
         }
     }
 }

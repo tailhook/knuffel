@@ -38,6 +38,8 @@ pub enum FieldMode {
     Child,
     Flatten(Flatten),
     Span,
+    NodeName,
+    TypeName,
 }
 
 pub enum FlattenItem {
@@ -97,6 +99,15 @@ pub struct Field {
 
 pub struct SpanField {
     pub field: Field,
+}
+
+pub struct NodeNameField {
+    pub field: Field,
+}
+
+pub struct TypeNameField {
+    pub field: Field,
+    pub option: bool,
 }
 
 pub struct Arg {
@@ -166,6 +177,8 @@ pub struct Struct {
     pub trait_props: TraitProps,
     pub generics: syn::Generics,
     pub spans: Vec<SpanField>,
+    pub node_names: Vec<NodeNameField>,
+    pub type_names: Vec<TypeNameField>,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -182,6 +195,8 @@ pub struct StructBuilder {
     pub trait_props: TraitProps,
     pub generics: syn::Generics,
     pub spans: Vec<SpanField>,
+    pub node_names: Vec<NodeNameField>,
+    pub type_names: Vec<TypeNameField>,
     pub arguments: Vec<Arg>,
     pub var_args: Option<VarArgs>,
     pub properties: Vec<Prop>,
@@ -345,6 +360,8 @@ impl StructBuilder {
             trait_props,
             generics,
             spans: Vec::new(),
+            node_names: Vec::new(),
+            type_names: Vec::new(),
             arguments: Vec::new(),
             var_args: None::<VarArgs>,
             properties: Vec::new(),
@@ -360,6 +377,8 @@ impl StructBuilder {
             trait_props: self.trait_props,
             generics: self.generics,
             spans: self.spans,
+            node_names: self.node_names,
+            type_names: self.type_names,
             has_arguments:
                 !self.arguments.is_empty() || self.var_args.is_some(),
             has_properties:
@@ -532,6 +551,15 @@ impl StructBuilder {
             Some(FieldMode::Span) => {
                 self.spans.push(SpanField { field });
             }
+            Some(FieldMode::NodeName) => {
+                self.node_names.push(NodeNameField { field });
+            }
+            Some(FieldMode::TypeName) => {
+                self.type_names.push(TypeNameField {
+                    field,
+                    option: is_option,
+                });
+            }
             None => {
                 self.extra_fields.push(ExtraField {
                     field,
@@ -562,6 +590,8 @@ impl Struct {
     pub fn all_fields(&self) -> Vec<&Field> {
         let mut res = Vec::new();
         res.extend(self.spans.iter().map(|a| &a.field));
+        res.extend(self.node_names.iter().map(|a| &a.field));
+        res.extend(self.type_names.iter().map(|a| &a.field));
         res.extend(self.arguments.iter().map(|a| &a.field));
         res.extend(self.var_args.iter().map(|a| &a.field));
         res.extend(self.properties.iter().map(|p| &p.field));
@@ -827,6 +857,12 @@ impl Attr {
         } else if lookahead.peek(kw::span) {
             let _kw: kw::span = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Span))
+        } else if lookahead.peek(kw::node_name) {
+            let _kw: kw::node_name = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::NodeName))
+        } else if lookahead.peek(kw::type_name) {
+            let _kw: kw::type_name = input.parse()?;
+            Ok(Attr::FieldMode(FieldMode::TypeName))
         } else if lookahead.peek(kw::span_type) {
             let _kw: kw::span_type = input.parse()?;
             let _eq: syn::Token![=] = input.parse()?;
