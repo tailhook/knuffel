@@ -143,6 +143,18 @@ struct Unwrap {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct UnwrapFiltChildren {
+    #[knuffel(children(name="labels"), unwrap(arguments))]
+    labels: Vec<Vec<String>>,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct UnwrapChildren {
+    #[knuffel(children, unwrap(arguments))]
+    labels: Vec<Vec<String>>,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct Parse {
     #[knuffel(child, unwrap(argument, str))]
     listen: std::net::SocketAddr,
@@ -295,6 +307,28 @@ fn parse_unwrap() {
         "child node `label` is required");
     assert_eq!(parse_doc::<Unwrap>(r#"label "hello""#),
                Unwrap { label: "hello".into() } );
+}
+
+#[test]
+fn parse_unwrap_filtered_children() {
+    assert_eq!(parse::<UnwrapFiltChildren>(
+       r#"node { labels "hello" "world"; labels "oh" "my"; }"#),
+       UnwrapFiltChildren { labels: vec![
+           vec!["hello".into(), "world".into()],
+           vec!["oh".into(), "my".into()],
+       ]},
+    );
+}
+
+#[test]
+fn parse_unwrap_children() {
+    assert_eq!(parse::<UnwrapChildren>(
+       r#"node { some "hello" "world"; other "oh" "my"; }"#),
+       UnwrapChildren { labels: vec![
+           vec!["hello".into(), "world".into()],
+           vec!["oh".into(), "my".into()],
+       ]},
+    );
 }
 
 #[test]

@@ -615,10 +615,10 @@ fn decode_node(common: &Common, child_def: &Child, in_partial: bool,
     } else {
         quote!(#fld)
     };
-    let (init, func) = if let ChildMode::Unwrap(inner) = &child_def.mode {
+    let (init, func) = if let Some(unwrap) = &child_def.unwrap {
         let func = syn::Ident::new(&format!("unwrap_{}", fld),
                                    Span::mixed_site());
-        let unwrap_fn = unwrap_fn(common, &func, fld, inner)?;
+        let unwrap_fn = unwrap_fn(common, &func, fld, unwrap)?;
         (unwrap_fn, quote!(#func))
     } else {
         (quote!(), quote!(::knuffel::Decode::decode_node))
@@ -824,7 +824,7 @@ fn decode_children(s: &Common, children: &syn::Ident,
                     });
                 }
             }
-            ChildMode::Normal | ChildMode::Unwrap(_) => {
+            ChildMode::Normal => {
                 declare_empty.push(quote! {
                     let mut #fld = None;
                 });
@@ -900,9 +900,20 @@ fn decode_children(s: &Common, children: &syn::Ident,
     }
     if let Some(var_children) = &s.object.var_children {
         let fld = &var_children.field.tmp_name;
+
+        let (init, func) = if let Some(unwrap) = &var_children.unwrap {
+            let func = syn::Ident::new(&format!("unwrap_{}", fld),
+                                       Span::mixed_site());
+            let unwrap_fn = unwrap_fn(s, &func, fld, unwrap)?;
+            (unwrap_fn, quote!(#func))
+        } else {
+            (quote!(), quote!(::knuffel::Decode::decode_node))
+        };
+
         match_branches.push(quote! {
             _ => {
-                match ::knuffel::Decode::decode_node(#child, #ctx) {
+                #init
+                match #func(#child, #ctx) {
                     Ok(#child) => Some(Ok(#child)),
                     Err(e) => Some(Err(e)),
                 }

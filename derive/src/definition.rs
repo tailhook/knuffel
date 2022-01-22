@@ -139,7 +139,6 @@ pub struct VarProps {
 
 pub enum ChildMode {
     Normal,
-    Unwrap(Box<FieldAttrs>),
     Flatten,
     Multi,
     Bool,
@@ -150,11 +149,13 @@ pub struct Child {
     pub name: String,
     pub option: bool,
     pub mode: ChildMode,
+    pub unwrap: Option<Box<FieldAttrs>>,
     pub default: Option<Option<syn::Expr>>,
 }
 
 pub struct VarChildren {
     pub field: Field,
+    pub unwrap: Option<Box<FieldAttrs>>,
 }
 
 pub enum ExtraKind {
@@ -477,13 +478,12 @@ impl StructBuilder {
                     name,
                     field,
                     option: is_option,
-                    mode: if let Some(unwrap) = &attrs.unwrap {
-                        ChildMode::Unwrap(unwrap.clone())
-                    } else if is_bool {
+                    mode: if attrs.unwrap.is_none() && is_bool {
                         ChildMode::Bool
                     } else {
                         ChildMode::Normal
                     },
+                    unwrap: attrs.unwrap.clone(),
                     default: attrs.default.clone(),
                 });
             }
@@ -498,6 +498,7 @@ impl StructBuilder {
                     field,
                     option: is_option,
                     mode: ChildMode::Multi,
+                    unwrap: attrs.unwrap.clone(),
                     default: attrs.default.clone(),
                 });
             }
@@ -509,6 +510,7 @@ impl StructBuilder {
                 }
                 self.var_children = Some(VarChildren {
                     field,
+                    unwrap: attrs.unwrap.clone(),
                 });
             }
             Some(FieldMode::Flatten(flatten)) => {
@@ -544,6 +546,7 @@ impl StructBuilder {
                         field: field.clone(),
                         option: is_option,
                         mode: ChildMode::Flatten,
+                        unwrap: None,
                         default: None,
                     });
                 }
