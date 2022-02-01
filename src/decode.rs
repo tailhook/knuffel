@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::ast::{Literal, BuiltinType, Value, SpannedNode};
 use crate::errors::{DecodeError, ExpectedType};
-use crate::traits::ErrorSpan;
+use crate::traits::{ErrorSpan, Decode};
 
 
 /// Context is passed through all the decode operations and can be used for:
@@ -127,6 +127,24 @@ pub fn check_flag_node<S: ErrorSpan>(
                         child.node_name.escape_default())
                 ));
         }
+    }
+}
+
+/// Parse single KDL node from AST
+pub fn node<T, S>(ast: &SpannedNode<S>) -> Result<T, Vec<DecodeError<S>>>
+    where T: Decode<S>,
+          S: ErrorSpan,
+{
+    let mut ctx = Context::new();
+    match Decode::decode_node(ast, &mut ctx) {
+        Ok(_) if ctx.has_errors() => {
+            Err(ctx.into_errors())
+        }
+        Err(e) => {
+            ctx.emit_error(e);
+            Err(ctx.into_errors())
+        }
+        Ok(v) => Ok(v)
     }
 }
 
