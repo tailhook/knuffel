@@ -39,7 +39,7 @@ pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
     parse_with_context(file_name, text, |_| {})
 }
 
-/// Parse KLD text and decode Rust object providing extra context for the
+/// Parse KDL text and decode Rust object providing extra context for the
 /// decoder
 pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
     -> Result<T, Error<S>>
