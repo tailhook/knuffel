@@ -289,10 +289,28 @@ impl<T, S> Spanned<T, S> {
     }
 }
 
+impl<T, S> AsRef<T> for Spanned<T, S> {
+    fn as_ref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T, S> AsMut<T> for Spanned<T, S> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
 impl<T, S> std::ops::Deref for Spanned<T, S> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.value
+    }
+}
+
+impl<T, S> std::ops::DerefMut for Spanned<T, S> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
     }
 }
 
