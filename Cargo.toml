@@ -24,6 +24,7 @@ chumsky = { git="https://github.com/zesterer/chumsky" }
 knuffel-derive = {path="./derive", optional=true}
 base64 = {version="0.13.0", optional=true}
 unicode-width = {version="0.1.9", optional=true}
+minicbor = {version="0.13.2", optional=true, features=["std", "derive"]}
 miette = "3.3.0"
 thiserror = "1.0.30"
 

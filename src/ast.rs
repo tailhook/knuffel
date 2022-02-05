@@ -28,48 +28,76 @@ pub type SpannedNode<S> = Spanned<Node<S>, S>;
 
 /// Single node of the KDL document
 #[derive(Debug, Clone)]
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Node<S> {
     /// A type name if specified in parenthesis
+    #[cfg_attr(feature="minicbor", n(0))]
     pub type_name: Option<Spanned<TypeName, S>>,
     /// A node name
+    #[cfg_attr(feature="minicbor", n(1))]
     pub node_name: SpannedName<S>,
     /// Positional arguments
+    #[cfg_attr(feature="minicbor", n(2))]
     pub arguments: Vec<Value<S>>,
     /// Named properties
+    #[cfg_attr(feature="minicbor", n(3))]
     pub properties: BTreeMap<SpannedName<S>, Value<S>>,
     /// Node's children. This field is not none if there are braces `{..}`
+    #[cfg_attr(feature="minicbor", n(4))]
     pub children: Option<SpannedChildren<S>>,
 }
 
 /// KDL document root
 #[derive(Debug, Clone)]
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Document<S> {
     /// Nodes of the document
+    #[cfg_attr(feature="minicbor", n(0))]
     pub nodes: Vec<SpannedNode<S>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
+#[cfg_attr(feature="minicbor", cbor(index_only))]
 pub(crate) enum Radix {
+    #[cfg_attr(feature="minicbor", n(2))]
     Bin,
+    #[cfg_attr(feature="minicbor", n(16))]
     Hex,
+    #[cfg_attr(feature="minicbor", n(8))]
     Oct,
+    #[cfg_attr(feature="minicbor", n(10))]
     Dec,
 }
 
 /// Potentially unlimited size integer value
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Integer(pub(crate) Radix, pub(crate) Box<str>);
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
+pub struct Integer(
+    #[cfg_attr(feature="minicbor", n(0))]
+    pub(crate) Radix,
+    #[cfg_attr(feature="minicbor", n(1))]
+    pub(crate) Box<str>,
+);
 
 /// Potentially unlimited precision decimal value
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Decimal(pub(crate) Box<str>);
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
+#[cfg_attr(feature="minicbor", cbor(transparent))]
+pub struct Decimal(
+    #[cfg_attr(feature="minicbor", n(0))]
+    pub(crate) Box<str>,
+);
 
 /// Possibly typed KDL scalar value
 #[derive(Debug, Clone)]
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Value<S> {
     /// A type name if specified in parenthesis
+    #[cfg_attr(feature="minicbor", n(0))]
     pub type_name: Option<Spanned<TypeName, S>>,
     /// The actual value literal
+    #[cfg_attr(feature="minicbor", n(1))]
     pub literal: Spanned<Literal, S>,
 }
 
@@ -109,17 +137,35 @@ pub enum BuiltinType {
 
 /// Scalar KDL value
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub enum Literal {
-    /// Integer value
-    Int(Integer),
-    /// Decimal (or floating point) value
-    Decimal(Decimal),
-    /// String value
-    String(Box<str>),
-    /// Boolean value
-    Bool(bool),
     /// Null value
+    #[cfg_attr(feature="minicbor", n(0))]
     Null,
+    /// Boolean value
+    #[cfg_attr(feature="minicbor", n(1))]
+    Bool(
+        #[cfg_attr(feature="minicbor", n(0))]
+        bool
+    ),
+    /// Integer value
+    #[cfg_attr(feature="minicbor", n(2))]
+    Int(
+        #[cfg_attr(feature="minicbor", n(0))]
+        Integer
+    ),
+    /// Decimal (or floating point) value
+    #[cfg_attr(feature="minicbor", n(3))]
+    Decimal(
+        #[cfg_attr(feature="minicbor", n(0))]
+        Decimal
+    ),
+    /// String value
+    #[cfg_attr(feature="minicbor", n(4))]
+    String(
+        #[cfg_attr(feature="minicbor", n(0))]
+        Box<str>
+    ),
 }
 
 impl<S> Node<S> {
@@ -231,5 +277,29 @@ impl fmt::Display for TypeName {
 impl Into<TypeName> for BuiltinType {
     fn into(self) -> TypeName {
         self.as_type()
+    }
+}
+
+#[cfg(feature="minicbor")]
+mod cbor {
+    use super::TypeName;
+    use minicbor::{Decoder, Encoder};
+    use minicbor::encode::Encode;
+    use minicbor::decode::Decode;
+
+    impl<'d> Decode<'d> for TypeName {
+        fn decode(d: &mut Decoder<'d>)
+            -> Result<Self, minicbor::decode::Error>
+        {
+            d.str().and_then(|s| s.parse().map_err(|e| match e {}))
+        }
+    }
+    impl Encode for TypeName {
+        fn encode<W>(&self, e: &mut Encoder<W>)
+            -> Result<(), minicbor::encode::Error<W::Error>>
+            where W: minicbor::encode::write::Write
+        {
+            self.as_str().encode(e)
+        }
     }
 }
