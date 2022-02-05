@@ -289,15 +289,15 @@ impl<T, S> Spanned<T, S> {
     }
 }
 
-impl<T, S> AsRef<T> for Spanned<T, S> {
-    fn as_ref(&self) -> &T {
-        &self.value
+impl<U: ?Sized, T: AsRef<U>, S> AsRef<U> for Spanned<T, S> {
+    fn as_ref(&self) -> &U {
+        self.value.as_ref()
     }
 }
 
-impl<T, S> AsMut<T> for Spanned<T, S> {
-    fn as_mut(&mut self) -> &mut T {
-        &mut self.value
+impl<U: ?Sized, T: AsMut<U>, S> AsMut<U> for Spanned<T, S> {
+    fn as_mut(&mut self) -> &mut U {
+        self.value.as_mut()
     }
 }
 
