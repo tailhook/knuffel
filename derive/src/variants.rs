@@ -29,7 +29,7 @@ pub fn emit_enum(e: &Enum) -> syn::Result<TokenStream> {
         common_generics.params.push(syn::parse2(quote!(S)).unwrap());
         span_ty = quote!(S);
         common_generics.make_where_clause().predicates.push(
-            syn::parse2(quote!(S: ::knuffel::traits::Span)).unwrap());
+            syn::parse2(quote!(S: ::knuffel::traits::ErrorSpan)).unwrap());
     };
     let trait_gen = quote!(<#span_ty>);
     let (impl_gen, _, bounds) = common_generics.split_for_impl();

@@ -36,7 +36,7 @@ pub fn emit_struct(s: &Struct, named: bool) -> syn::Result<TokenStream> {
         common_generics.params.push(syn::parse2(quote!(S)).unwrap());
         span_ty = quote!(S);
         common_generics.make_where_clause().predicates.push(
-            syn::parse2(quote!(S: ::knuffel::traits::Span)).unwrap());
+            syn::parse2(quote!(S: ::knuffel::traits::ErrorSpan)).unwrap());
     };
     let trait_gen = quote!(<#span_ty>);
     let (impl_gen, _, bounds) = common_generics.split_for_impl();
@@ -157,7 +157,9 @@ pub fn emit_new_type(s: &NewType) -> syn::Result<TokenStream> {
     let node = syn::Ident::new("node", Span::mixed_site());
     let ctx = syn::Ident::new("ctx", Span::mixed_site());
     Ok(quote! {
-        impl<S: ::knuffel::traits::Span> ::knuffel::Decode<S> for #s_name {
+        impl<S: ::knuffel::traits::ErrorSpan>
+            ::knuffel::Decode<S> for #s_name
+        {
             fn decode_node(#node: &::knuffel::ast::SpannedNode<S>,
                            #ctx: &mut ::knuffel::decode::Context<S>)
                 -> Result<Self, ::knuffel::errors::DecodeError<S>>
