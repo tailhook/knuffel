@@ -19,8 +19,7 @@ documentation = "https://docs.rs/knuffel"
 rust-version = "1.56.0"
 
 [dependencies]
-#chumsky = "0.7.0"
-chumsky = { git="https://github.com/zesterer/chumsky" }
+chumsky = "0.8.0"
 knuffel-derive = {path="./derive", optional=true}
 base64 = {version="0.13.0", optional=true}
 unicode-width = {version="0.1.9", optional=true}
