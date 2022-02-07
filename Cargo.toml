@@ -21,7 +21,7 @@ readme = "README.md"
 
 [dependencies]
 chumsky = {version="0.8.0", default-features=false}
-knuffel-derive = {path="./derive", version= "^1.0.0", optional=true}
+knuffel-derive = {path="./derive", version= "^1.0.1-alpha.0", optional=true}
 base64 = {version="0.13.0", optional=true}
 unicode-width = {version="0.1.9", optional=true}
 minicbor = {version="0.13.2", optional=true, features=["std", "derive"]}
