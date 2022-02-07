@@ -276,7 +276,7 @@ impl Variant {
     fn new(ident: syn::Ident, _attrs: VariantAttrs, kind: VariantKind)
         -> syn::Result<Self>
     {
-        let name = heck::KebabCase::to_kebab_case(&ident.to_string()[..]);
+        let name = heck::ToKebabCase::to_kebab_case(&ident.to_string()[..]);
         Ok(Variant {
             ident,
             name,
@@ -432,7 +432,7 @@ impl StructBuilder {
                 let name = match (name, &field.attr) {
                     (Some(name), _) => name.clone(),
                     (None, AttrAccess::Named(name))
-                    => heck::KebabCase::to_kebab_case(&name.to_string()[..]),
+                    => heck::ToKebabCase::to_kebab_case(&name.to_string()[..]),
                     (None, AttrAccess::Indexed(_)) => {
                         return Err(syn::Error::new(field.span,
                             "property must be named, try \
@@ -467,7 +467,7 @@ impl StructBuilder {
                 }
                 let name = match &field.attr {
                     AttrAccess::Named(n) => {
-                        heck::KebabCase::to_kebab_case(&n.to_string()[..])
+                        heck::ToKebabCase::to_kebab_case(&n.to_string()[..])
                     }
                     AttrAccess::Indexed(_) => {
                         return Err(syn::Error::new(field.span,

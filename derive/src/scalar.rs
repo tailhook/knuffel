@@ -27,7 +27,7 @@ impl Enum {
         for var in src_variants {
             match var.fields {
                 syn::Fields::Unit => {
-                    let name = heck::KebabCase
+                    let name = heck::ToKebabCase
                         ::to_kebab_case(&var.ident.to_string()[..]);
                     variants.push(Variant {
                         ident: var.ident,
