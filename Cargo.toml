@@ -17,6 +17,7 @@ categories = ["parser-implementations", "configuration", "encoding"]
 homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
 rust-version = "1.56.0"
+readme = "README.md"
 
 [dependencies]
 chumsky = {version="0.8.0", default-features=false}

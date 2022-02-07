@@ -9,6 +9,7 @@ license = "MIT/Apache-2.0"
 keywords = ["kdl", "configuration"]
 homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
+readme = "README.md"
 
 [lib]
 proc_macro = true
