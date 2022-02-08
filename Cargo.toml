@@ -13,7 +13,7 @@ description = """
 """
 license = "MIT/Apache-2.0"
 keywords = ["kdl", "configuration", "parser"]
-categories = ["parser-implementations", "configuration", "encoding"]
+categories = ["parser-implementations", "config", "encoding"]
 homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
 rust-version = "1.56.0"
