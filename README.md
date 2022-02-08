@@ -98,7 +98,7 @@ reference on allowed attributes and parse modes.
 
 This crate publishes nice errors, like this:
 
-<img src="https://raw.githubusercontent.com/tailhook/knuffel/main/images/error.png" alt="
+<img width="50%" src="https://raw.githubusercontent.com/tailhook/knuffel/main/images/error.png" alt="
 Screenshot of error. Here is how narratable printer would print the error:
 Error: single char expected after `Alt+`
     Diagnostic severity: error

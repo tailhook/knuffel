@@ -29,6 +29,8 @@ If structure only has `child` and `children` fields (see [below](#children)) it
 can be used as a root document (the output of [`knuffel::parse`]). Or root of
 the document can be `Vec<T> where T: Decode`.
 
+[`knuffel::parse`]: fn.parse.html
+
 Note: node name is usually not used in the structure decoding node, it's
 matched either in parent or in an [enum](#enums).
 
@@ -501,7 +503,7 @@ struct MyNode {
 Note: attributes in the `unwrap` have no influence on whether structure can be
 used to decode document.
 
-Technically [DecodeChildren](knuffel::traits::DecodeChildren) trait will be
+Technically [DecodeChildren](traits/trait.DecodeChildren.html) trait will be
 implemented for the structures that can be used as documents.
 
 
@@ -601,7 +603,7 @@ There are few limitations of the `flatten`:
 
 We may lift some of these limitations later.
 
-Technically [DecodePartial](knuffel::traits::DecodePartial) trait will be
+Technically [DecodePartial](traits/trait.DecodePartial.html) trait will be
 implemented for the strucutures that can be used with the `flatten` attribute.
 
 
@@ -691,7 +693,7 @@ newline if node ends by a newline, but doesn't include anything after
 semicolon).
 
 The span value might be different than one used for parsing. In this case, it
-should implement [`DecodeSpan`](knuffel::traits::DecodeSpan) trait.
+should implement [`DecodeSpan`](traits/trait.DecodeSpan.html) trait.
 
 Independenly of whether you use custom span type, or built-in one, you have to
 specify `span_type` for the decoder, since there is no generic implementation
