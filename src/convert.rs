@@ -72,6 +72,8 @@ impl_integer!(i32, I32);
 impl_integer!(u32, U32);
 impl_integer!(i64, I64);
 impl_integer!(u64, U64);
+impl_integer!(isize, Isize);
+impl_integer!(usize, Usize);
 
 impl<S: ErrorSpan> DecodeScalar<S> for String {
     fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)

@@ -131,6 +131,10 @@ pub enum BuiltinType {
     U64,
     /// `i64`: 64-bit signed integer type
     I64,
+    /// `usize`: platform-dependent unsigned integer type
+    Usize,
+    /// `isize`: platform-dependent signed integer type
+    Isize,
     /// `base64` denotes binary bytes type encoded using base64 encoding
     Base64,
 }
@@ -192,6 +196,8 @@ impl BuiltinType {
             I32 => "i32",
             U64 => "u64",
             I64 => "i64",
+            Usize => "usize",
+            Isize => "isize",
             Base64 => "base64",
         }
     }
