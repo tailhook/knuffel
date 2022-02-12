@@ -21,8 +21,8 @@ foo 1 "three" key="val" {                           ╮
  │  ╰────┴────────────── arguments                  │
  │                                                  │
  └── node name                                      ├─ node "foo", with
-                                                    │  "bar" and "baz" being
-    bar                                             │  children
+                                                    │  "bar" and "baz"
+    bar                                             │  being children
     (role)baz 1 2                                   │
      ──┬─                                           │
        └────── type name for node named "baz"       │
