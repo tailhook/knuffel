@@ -6,7 +6,7 @@ use crate::decode::Context;
 use crate::errors::DecodeError;
 use crate::span::Spanned;
 use crate::traits::{Decode, DecodeChildren, DecodeScalar, DecodePartial};
-use crate::traits::{ErrorSpan};
+use crate::traits::{ErrorSpan, DecodeSpan, Span};
 
 
 impl<S: ErrorSpan, T: Decode<S>> Decode<S> for Box<T> {
@@ -171,5 +171,25 @@ impl<S: ErrorSpan, T: DecodeScalar<S>> DecodeScalar<S> for Option<T> {
             Literal::Null => Ok(None),
             _ => DecodeScalar::raw_decode(value, ctx).map(Some),
         }
+    }
+}
+
+impl<T: DecodeScalar<S>, S, Q> DecodeScalar<S> for Spanned<T, Q>
+    where S: Span,
+          Q: DecodeSpan<S>
+{
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                  ctx: &mut Context<S>)
+    {
+        T::type_check(type_name, ctx)
+    }
+    fn raw_decode(value: &Spanned<Literal, S>, ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        let decoded = T::raw_decode(value, ctx)?;
+        Ok(Spanned {
+            span: DecodeSpan::decode_span(&value.span, ctx),
+            value: decoded,
+        })
     }
 }
