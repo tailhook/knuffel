@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 
@@ -28,7 +29,7 @@ impl Enum {
             match var.fields {
                 syn::Fields::Unit => {
                     let name = heck::ToKebabCase
-                        ::to_kebab_case(&var.ident.to_string()[..]);
+                        ::to_kebab_case(&var.ident.unraw().to_string()[..]);
                     variants.push(Variant {
                         ident: var.ident,
                         name,

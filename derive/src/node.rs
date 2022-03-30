@@ -1,5 +1,6 @@
 use proc_macro2::{TokenStream, Span};
-use quote::{quote, ToTokens};
+use quote::{format_ident, quote, ToTokens};
+use syn::ext::IdentExt;
 
 use crate::definition::{Struct, StructBuilder, ArgKind, FieldAttrs, DecodeMode};
 use crate::definition::{Child, Field, NewType, ExtraKind, ChildMode};
@@ -401,7 +402,7 @@ fn decode_args(s: &Common, node: &syn::Ident) -> syn::Result<TokenStream> {
                 let error = if arg.field.is_indexed() {
                     "additional argument is required".into()
                 } else {
-                    format!("additional argument `{}` is required", fld)
+                    format!("additional argument `{}` is required", fld.unraw())
                 };
                 decoder.push(quote! {
                     let #val =
@@ -464,8 +465,7 @@ fn decode_props(s: &Common, node: &syn::Ident)
     for prop in &s.object.properties {
         let fld = &prop.field.tmp_name;
         let prop_name = &prop.name;
-        let seen_name = syn::Ident::new(&format!("seen_{}", fld),
-                                        Span::mixed_site());
+        let seen_name = format_ident!("seen_{}", fld, span = Span::mixed_site());
         if prop.flatten {
             declare_empty.push(quote! {
                 let mut #fld = ::std::default::Default::default();
@@ -573,7 +573,7 @@ fn unwrap_fn(parent: &Common,
     let ctx = parent.ctx;
     let span_ty = parent.span_type;
     let mut bld = StructBuilder::new(
-        syn::Ident::new(&format!("Wrap_{}", name), Span::mixed_site()),
+        format_ident!("Wrap_{}", name, span = Span::mixed_site()),
         parent.object.trait_props.clone(),
         parent.object.generics.clone(),
     );
@@ -618,8 +618,7 @@ fn decode_node(common: &Common, child_def: &Child, in_partial: bool,
         quote!(#fld)
     };
     let (init, func) = if let Some(unwrap) = &child_def.unwrap {
-        let func = syn::Ident::new(&format!("unwrap_{}", fld),
-                                   Span::mixed_site());
+        let func = format_ident!("unwrap_{}", fld, span = Span::mixed_site());
         let unwrap_fn = unwrap_fn(common, &func, fld, unwrap)?;
         (unwrap_fn, quote!(#func))
     } else {
@@ -904,8 +903,7 @@ fn decode_children(s: &Common, children: &syn::Ident,
         let fld = &var_children.field.tmp_name;
 
         let (init, func) = if let Some(unwrap) = &var_children.unwrap {
-            let func = syn::Ident::new(&format!("unwrap_{}", fld),
-                                       Span::mixed_site());
+            let func = format_ident!("unwrap_{}", fld, span = Span::mixed_site());
             let unwrap_fn = unwrap_fn(s, &func, fld, unwrap)?;
             (unwrap_fn, quote!(#func))
         } else {
