@@ -15,6 +15,12 @@ struct Arg1 {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct Arg1RawIdent {
+    #[knuffel(argument)]
+    r#type: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct ArgDef {
     #[knuffel(argument, default)]
     name: String,
@@ -53,6 +59,12 @@ struct VarArg {
 struct Prop1 {
     #[knuffel(property)]
     label: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq, Default)]
+struct Prop1RawIdent {
+    #[knuffel(property)]
+    r#type: String,
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
@@ -143,6 +155,12 @@ struct Unwrap {
 }
 
 #[derive(knuffel_derive::Decode, Debug, PartialEq)]
+struct UnwrapRawIdent {
+    #[knuffel(child, unwrap(argument))]
+    r#type: String,
+}
+
+#[derive(knuffel_derive::Decode, Debug, PartialEq)]
 struct UnwrapFiltChildren {
     #[knuffel(children(name="labels"), unwrap(arguments))]
     labels: Vec<Vec<String>>,
@@ -214,6 +232,18 @@ fn parse_arg1() {
         "additional argument `name` is required");
 }
 
+#[test]
+fn parse_arg1_raw_ident() {
+    assert_eq!(parse::<Arg1RawIdent>(r#"node "hello""#),
+               Arg1RawIdent { r#type: "hello".into() } );
+    assert_eq!(parse_err::<Arg1RawIdent>(r#"node "hello" "world""#),
+               "unexpected argument");
+    assert_eq!(parse_err::<Arg1RawIdent>(r#"(some)node "hello""#),
+               "no type name expected for this node");
+    assert_eq!(parse_err::<Arg1RawIdent>(r#"node"#),
+               "additional argument `type` is required");
+}
+
 
 #[test]
 fn parse_arg_default() {
@@ -265,6 +295,16 @@ fn parse_prop() {
 }
 
 #[test]
+fn parse_prop_raw_ident() {
+    assert_eq!(parse::<Prop1RawIdent>(r#"node type="hello""#),
+               Prop1RawIdent { r#type: "hello".into() } );
+    assert_eq!(parse_err::<Prop1RawIdent>(r#"node type="hello" y="world""#),
+               "unexpected property `y`");
+    assert_eq!(parse_err::<Prop1RawIdent>(r#"node"#),
+               "property `type` is required");
+}
+
+#[test]
 fn parse_prop_default() {
     assert_eq!(parse::<PropDef>(r#"node label="hello""#),
                PropDef { label: "hello".into() } );
@@ -307,6 +347,18 @@ fn parse_unwrap() {
         "child node `label` is required");
     assert_eq!(parse_doc::<Unwrap>(r#"label "hello""#),
                Unwrap { label: "hello".into() } );
+}
+
+#[test]
+fn parse_unwrap_raw_ident() {
+    assert_eq!(parse::<UnwrapRawIdent>(r#"node { type "hello"; }"#),
+               UnwrapRawIdent { r#type: "hello".into() } );
+    assert_eq!(parse_err::<UnwrapRawIdent>(r#"node type="hello""#),
+               "unexpected property `type`");
+    assert_eq!(parse_err::<UnwrapRawIdent>(r#"node"#),
+               "child node `type` is required");
+    assert_eq!(parse_doc::<UnwrapRawIdent>(r#"type "hello""#),
+               UnwrapRawIdent { r#type: "hello".into() } );
 }
 
 #[test]

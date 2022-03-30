@@ -3,6 +3,7 @@ use std::mem;
 use proc_macro2::{TokenStream, Span};
 use proc_macro_error::emit_error;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -276,7 +277,7 @@ impl Variant {
     fn new(ident: syn::Ident, _attrs: VariantAttrs, kind: VariantKind)
         -> syn::Result<Self>
     {
-        let name = heck::ToKebabCase::to_kebab_case(&ident.to_string()[..]);
+        let name = heck::ToKebabCase::to_kebab_case(&ident.unraw().to_string()[..]);
         Ok(Variant {
             ident,
             name,
@@ -432,7 +433,7 @@ impl StructBuilder {
                 let name = match (name, &field.attr) {
                     (Some(name), _) => name.clone(),
                     (None, AttrAccess::Named(name))
-                    => heck::ToKebabCase::to_kebab_case(&name.to_string()[..]),
+                    => heck::ToKebabCase::to_kebab_case(&name.unraw().to_string()[..]),
                     (None, AttrAccess::Indexed(_)) => {
                         return Err(syn::Error::new(field.span,
                             "property must be named, try \
@@ -467,7 +468,7 @@ impl StructBuilder {
                 }
                 let name = match &field.attr {
                     AttrAccess::Named(n) => {
-                        heck::ToKebabCase::to_kebab_case(&n.to_string()[..])
+                        heck::ToKebabCase::to_kebab_case(&n.unraw().to_string()[..])
                     }
                     AttrAccess::Indexed(_) => {
                         return Err(syn::Error::new(field.span,
