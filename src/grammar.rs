@@ -565,10 +565,9 @@ pub(crate) fn document<S: Span>()
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use chumsky::prelude::*;
     use miette::NamedSource;
-    use crate::errors::{SyntaxErrors, ParseError, AddSource};
+    use crate::errors::{ParseError, Error};
     use crate::span::Span;
     use crate::ast::{Literal, TypeName, Radix, Decimal, Integer};
     use crate::traits::sealed::Sealed;
@@ -581,9 +580,9 @@ mod test {
             let left: serde_json::Value = serde_json::from_str(&left).unwrap();
             let right: serde_json::Value =
                 serde_json::from_str($right).unwrap();
-            //assert_json_diff::assert_json_includes!(
-            //    actual: left, expected: right);
-            assert_json_diff::assert_json_eq!(left, right);
+            assert_json_diff::assert_json_include!(
+                actual: left, expected: right);
+            //assert_json_diff::assert_json_eq!(left, right);
         }
     }
 
@@ -592,17 +591,10 @@ mod test {
     {
         p.then_ignore(end())
         .parse(Span::stream(text)).map_err(|errors| {
-            let source: std::sync::Arc<String> = (text.to_string() + " ").into();
-            let source = Arc::new(
-                NamedSource::new("<test>", source)
-            );
-            let e = SyntaxErrors {
-                errors: errors.into_iter().map(|error| {
-                    AddSource {
-                        source_code: source.clone(),
-                        error,
-                    }
-                }).collect(),
+            let source = text.to_string() + " ";
+            let e = Error {
+                source_code: NamedSource::new("<test>", source),
+                errors: errors.into_iter().map(Into::into).collect(),
             };
             let mut buf = String::with_capacity(512);
             miette::GraphicalReportHandler::new()
@@ -638,7 +630,7 @@ mod test {
     #[test]
     fn parse_comment_err() {
         err_eq!(parse(ws(), r#"/* comment"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -655,7 +647,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* com/*ment *"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -672,7 +664,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* com/*me*/nt *"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -689,7 +681,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/* comment *"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -706,7 +698,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(ws(), r#"/*/"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -724,7 +716,7 @@ mod test {
         }"#);
         // nothing is expected for comment or whitespace
         err_eq!(parse(ws(), r#"xxx"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -762,7 +754,7 @@ mod test {
     #[test]
     fn parse_str_err() {
         err_eq!(parse(string(), r#""hello"#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -779,7 +771,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{FFFFFF}llo""#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -794,7 +786,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{1234567}llo""#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -809,7 +801,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\u{1gh}llo""#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -824,7 +816,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r#""he\x01llo""#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -841,7 +833,7 @@ mod test {
         }"#);
         // Tests error recovery
         err_eq!(parse(string(), r#""he\u{FFFFFF}l\!lo""#), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -869,7 +861,7 @@ mod test {
     #[test]
     fn parse_raw_str_err() {
         err_eq!(parse(string(), r#"r"hello"#),  r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -886,7 +878,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(string(), r###"r#"hello""###), r###"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -903,7 +895,7 @@ mod test {
             }]
         }"###);
         err_eq!(parse(string(), r####"r###"hello"####), r####"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -920,7 +912,7 @@ mod test {
             }]
         }"####);
         err_eq!(parse(string(), r####"r###"hello"#world"####), r####"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -973,7 +965,7 @@ mod test {
         parse(nodes(), "item true").unwrap();
 
         err_eq!(parse(nodes(), "true \"item\""), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -990,7 +982,7 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "item false=true"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1007,7 +999,7 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "item 2=2"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1038,7 +1030,7 @@ mod test {
     #[test]
     fn parse_type_err() {
         err_eq!(parse(type_name(), "(123)"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1054,7 +1046,7 @@ mod test {
         }"#);
 
         err_eq!(parse(type_name(), "(-1)"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1232,7 +1224,7 @@ mod test {
     #[test]
     fn parse_node_err() {
         err_eq!(parse(nodes(), "hello{"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1249,7 +1241,7 @@ mod test {
             }]
         }"#);
         err_eq!(parse(nodes(), "hello world"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1266,7 +1258,7 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "hello world {"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1294,7 +1286,7 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "1 + 2"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{
@@ -1310,7 +1302,7 @@ mod test {
         }"#);
 
         err_eq!(parse(nodes(), "-1 +2"), r#"{
-            "message": "KDL syntax error",
+            "message": "error parsing KDL",
             "severity": "error",
             "labels": [],
             "related": [{

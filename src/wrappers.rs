@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use chumsky::Parser;
 use miette::NamedSource;
 
 use crate::ast::Document;
 use crate::decode::Context;
-use crate::errors::{Error, AddSource, SyntaxErrors, DecodeErrors};
+use crate::errors::Error;
 use crate::grammar;
 use crate::span::{Span};
 use crate::traits::{self, DecodeChildren};
@@ -13,27 +11,20 @@ use crate::traits::{self, DecodeChildren};
 
 /// Parse KDL text and return AST
 pub fn parse_ast<S: traits::Span>(file_name: &str, text: &str)
-    -> Result<Document<S>, Error<S>>
+    -> Result<Document<S>, Error>
 {
     grammar::document()
     .parse(S::stream(text))
     .map_err(|errors| {
-        let source_code = Arc::new(
-            NamedSource::new(file_name, text.to_string()));
-        let e = SyntaxErrors {
-            errors: errors.into_iter().map(|error| {
-                AddSource {
-                    source_code: source_code.clone(),
-                    error,
-                }
-            }).collect(),
-        };
-        Error::Syntax(e)
+        Error {
+            source_code: NamedSource::new(file_name, text.to_string()),
+            errors: errors.into_iter().map(Into::into).collect(),
+        }
     })
 }
 
 /// Parse KDL text and decode Rust object
-pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
+pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error>
     where T: DecodeChildren<Span>,
 {
     parse_with_context(file_name, text, |_| {})
@@ -42,7 +33,7 @@ pub fn parse<T>(file_name: &str, text: &str) -> Result<T, Error<Span>>
 /// Parse KDL text and decode Rust object providing extra context for the
 /// decoder
 pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
-    -> Result<T, Error<S>>
+    -> Result<T, Error>
     where F: FnOnce(&mut Context<S>),
           T: DecodeChildren<S>,
           S: traits::Span,
@@ -61,16 +52,10 @@ pub fn parse_with_context<T, S, F>(file_name: &str, text: &str, set_ctx: F)
         }
         Ok(v) => return Ok(v)
     };
-    let source_code = Arc::new(NamedSource::new(file_name, text.to_string()));
-    let e = DecodeErrors {
-        errors: errors.into_iter().map(|error| {
-            AddSource {
-                source_code: source_code.clone(),
-                error,
-            }
-        }).collect(),
-    };
-    Err(Error::Decode(e))
+    return Err(Error {
+        source_code: NamedSource::new(file_name, text.to_string()),
+        errors: errors.into_iter().map(Into::into).collect(),
+    });
 }
 
 #[test]

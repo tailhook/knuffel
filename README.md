@@ -115,7 +115,7 @@ To make them working, [miette]'s "fancy" feature must be enabled in the final
 application's `Cargo.toml`:
 ```toml
 [dependencies]
-miette = { version="3.3.0", features=["fancy"] }
+miette = { version="4.3.0", features=["fancy"] }
 ```
 And the error returned from parser should be converted to [miette::Report] and
 printed with debugging handler. The most manual way to do that is:

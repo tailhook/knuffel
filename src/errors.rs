@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
-use std::sync::Arc;
 
 use thiserror::Error;
 use miette::{Diagnostic, NamedSource};
@@ -16,43 +15,20 @@ use crate::decode::Kind;
 use crate::traits::{ErrorSpan, Span};
 
 
-#[derive(Debug, Diagnostic, Error)]
-#[error("{}", error)]
-#[diagnostic(forward(error))]
-pub(crate) struct AddSource<E: Diagnostic + Send + Sync + 'static> {
-    #[source_code]
-    pub source_code: Arc<NamedSource>,
-    pub error: E,
-}
-
 /// Main error that is returned from KDL parsers
 ///
-/// These implement [`miette::Diagnostic`] so can be used to print nice error
+/// Implements [`miette::Diagnostic`] so can be used to print nice error
 /// output with code snippets.
 ///
 /// See [crate documentation](crate#Errors) and [miette} documentation to
 /// find out how deal with them.
 #[derive(Debug, Diagnostic, Error)]
-#[non_exhaustive]
-pub enum Error<E: ErrorSpan> {
-    /// Syntax error
-    ///
-    /// This error means that AST could not be parsed from the original text.
-    ///
-    /// Multiple errors will be shown here if parser recovery is possible.
-    #[error("syntax error")]
-    #[diagnostic(transparent)]
-    Syntax(SyntaxErrors<E>),
-    /// Decode error
-    ///
-    /// This error mean that KDL document is fully valid and library was able to
-    /// construct AST, although decoding into the structs was not possible or
-    /// some of the user-specified validations are failed.
-    ///
-    /// Mutliple errors will be shown here if possible.
-    #[error("decode error")]
-    #[diagnostic(transparent)]
-    Decode(DecodeErrors<E>),
+#[error("error parsing KDL")]
+pub struct Error {
+    #[source_code]
+    pub(crate) source_code: NamedSource,
+    #[related]
+    pub(crate) errors: Vec<miette::Report>,
 }
 
 /// An error type that is returned by decoder traits and emitted to the context
@@ -170,32 +146,6 @@ pub enum DecodeError<S: ErrorSpan> {
     /// source code span to the error.
     #[error(transparent)]
     Custom(Box<dyn std::error::Error + Send + Sync + 'static>),
-}
-
-/// A wrapper that holds multiple syntax errors
-///
-/// Note currently this type is sealed. But you can have some generic access to
-/// the contained errors using [`miette::Diagnostic::related`].
-#[derive(Debug, Diagnostic, Error)]
-#[error("KDL syntax error")]
-#[diagnostic()]
-pub struct SyntaxErrors<S: ErrorSpan> {
-    #[related]
-    pub(crate) errors: Vec<AddSource<ParseError<S>>>,
-}
-
-/// A wrapper that holds multiple syntax errors
-///
-/// Note currently this type is sealed. This contains a list of `DecodeError`,
-/// but we want to abstract away specifics of how that is stored. You can have
-/// some generic access to the contained errors using
-/// [`miette::Diagnostic::related`], though.
-#[derive(Debug, Diagnostic, Error)]
-#[error("KDL decode error")]
-#[diagnostic()]
-pub struct DecodeErrors<S: ErrorSpan> {
-    #[related]
-    pub(crate) errors: Vec<AddSource<DecodeError<S>>>,
 }
 
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
