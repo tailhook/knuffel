@@ -2,15 +2,15 @@ use std::str::FromStr;
 use std::path::PathBuf;
 use std::default::Default;
 
-use crate::ast::{Literal, Integer, Radix, TypeName, BuiltinType};
+use crate::ast::{Literal, Integer, Decimal, Radix, TypeName, BuiltinType};
 use crate::decode::{Context, Kind};
 use crate::errors::{DecodeError, ExpectedType};
 use crate::span::{Spanned};
 use crate::traits::{ErrorSpan, DecodeScalar};
 
 
-macro_rules! impl_integer {
-    ($typ: ident, $marker: ident) => {
+macro_rules! impl_number {
+    ($typ: ident, $marker: ident, Integer) => {
         impl TryFrom<&Integer> for $typ {
             type Error = <$typ as FromStr>::Err;
             fn try_from(val: &Integer) -> Result<$typ, <$typ as FromStr>::Err>
@@ -24,24 +24,38 @@ macro_rules! impl_integer {
             }
         }
 
+        impl_number!(Impl, $typ, $marker, Int, 0);
+    };
+    ($typ: ident, $marker: ident, Decimal) => {
+        impl TryFrom<&Decimal> for $typ {
+            type Error = <$typ as FromStr>::Err;
+            fn try_from(val: &Decimal) -> Result<$typ, <$typ as FromStr>::Err>
+            {
+                <$typ>::from_str(&val.0)
+            }
+        }
+
+        impl_number!(Impl, $typ, $marker, Decimal, 0.0);
+    };
+    (Impl, $typ: ident, $marker: ident, $which: ident, $default: expr) => {
         impl<S: ErrorSpan> DecodeScalar<S> for $typ {
             fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
                 -> Result<$typ, DecodeError<S>>
             {
                 match &**val {
-                    Literal::Int(ref value) => {
+                    Literal::$which(ref value) => {
                         match value.try_into() {
                             Ok(val) => Ok(val),
                             Err(e) => {
                                 ctx.emit_error(DecodeError::conversion(val, e));
-                                Ok(0)
+                                Ok($default)
                             }
                         }
                     }
                     _ => {
                         ctx.emit_error(DecodeError::scalar_kind(
                                 Kind::String, val));
-                        Ok(0)
+                        Ok($default)
                     }
                 }
             }
@@ -61,19 +75,21 @@ macro_rules! impl_integer {
                 }
             }
         }
-    }
+    };
 }
 
-impl_integer!(i8, I8);
-impl_integer!(u8, U8);
-impl_integer!(i16, I16);
-impl_integer!(u16, U16);
-impl_integer!(i32, I32);
-impl_integer!(u32, U32);
-impl_integer!(i64, I64);
-impl_integer!(u64, U64);
-impl_integer!(isize, Isize);
-impl_integer!(usize, Usize);
+impl_number!(i8, I8, Integer);
+impl_number!(u8, U8, Integer);
+impl_number!(i16, I16, Integer);
+impl_number!(u16, U16, Integer);
+impl_number!(i32, I32, Integer);
+impl_number!(u32, U32, Integer);
+impl_number!(i64, I64, Integer);
+impl_number!(u64, U64, Integer);
+impl_number!(isize, Isize, Integer);
+impl_number!(usize, Usize, Integer);
+impl_number!(f32, F32, Decimal);
+impl_number!(f64, F64, Decimal);
 
 impl<S: ErrorSpan> DecodeScalar<S> for String {
     fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
