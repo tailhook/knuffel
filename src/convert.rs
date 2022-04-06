@@ -10,7 +10,12 @@ use crate::traits::{ErrorSpan, DecodeScalar};
 
 
 macro_rules! impl_number {
-    ($typ: ident, $marker: ident, Integer) => {
+    ($(($which: ident, $typ: ident, $marker: ident),)+) => {
+        $(
+            impl_number!($which, $typ, $marker);
+        )*
+    };
+    (Integer, $typ: ident, $marker: ident) => {
         impl TryFrom<&Integer> for $typ {
             type Error = <$typ as FromStr>::Err;
             fn try_from(val: &Integer) -> Result<$typ, <$typ as FromStr>::Err>
@@ -24,9 +29,9 @@ macro_rules! impl_number {
             }
         }
 
-        impl_number!(Impl, $typ, $marker, Int, 0);
+        impl_number!(_Impl, Int, $typ, $marker, 0);
     };
-    ($typ: ident, $marker: ident, Decimal) => {
+    (Decimal, $typ: ident, $marker: ident) => {
         impl TryFrom<&Decimal> for $typ {
             type Error = <$typ as FromStr>::Err;
             fn try_from(val: &Decimal) -> Result<$typ, <$typ as FromStr>::Err>
@@ -35,15 +40,15 @@ macro_rules! impl_number {
             }
         }
 
-        impl_number!(Impl, $typ, $marker, Decimal, 0.0);
+        impl_number!(_Impl, Decimal, $typ, $marker, 0.0);
     };
-    (Impl, $typ: ident, $marker: ident, $which: ident, $default: expr) => {
+    (_Impl, $variant: ident, $typ: ident, $marker: ident, $default: expr) => {
         impl<S: ErrorSpan> DecodeScalar<S> for $typ {
             fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
                 -> Result<$typ, DecodeError<S>>
             {
                 match &**val {
-                    Literal::$which(ref value) => {
+                    Literal::$variant(ref value) => {
                         match value.try_into() {
                             Ok(val) => Ok(val),
                             Err(e) => {
@@ -78,18 +83,20 @@ macro_rules! impl_number {
     };
 }
 
-impl_number!(i8, I8, Integer);
-impl_number!(u8, U8, Integer);
-impl_number!(i16, I16, Integer);
-impl_number!(u16, U16, Integer);
-impl_number!(i32, I32, Integer);
-impl_number!(u32, U32, Integer);
-impl_number!(i64, I64, Integer);
-impl_number!(u64, U64, Integer);
-impl_number!(isize, Isize, Integer);
-impl_number!(usize, Usize, Integer);
-impl_number!(f32, F32, Decimal);
-impl_number!(f64, F64, Decimal);
+impl_number!(
+    (Integer, i8, I8),
+    (Integer, u8, U8),
+    (Integer, i16, I16),
+    (Integer, u16, U16),
+    (Integer, i32, I32),
+    (Integer, u32, U32),
+    (Integer, i64, I64),
+    (Integer, u64, U64),
+    (Integer, isize, Isize),
+    (Integer, usize, Usize),
+    (Decimal, f32, F32),
+    (Decimal, f64, F64),
+);
 
 impl<S: ErrorSpan> DecodeScalar<S> for String {
     fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
