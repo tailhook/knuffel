@@ -1,4 +1,12 @@
+# Vagga
 /.vagga
+
+# IDEA/CLion
+/.idea
+
+# Rust
 /target
-/tmp
 Cargo.lock
+
+# Miscellaneous
+/tmp
