@@ -11,28 +11,33 @@ use crate::traits::{ErrorSpan, DecodeScalar};
 
 macro_rules! impl_number {
     // Matches a repeating pattern of
-    // `(<type_name>, <number_type>, <marker>)` followed by a comma,
-    // where `<type_name>` is one of `Integer` or `Decimal`,
-    // and `<number_type>` is a Rust type (for example `i32` or `f64`),
-    // and `<marker>` is the variant of `BuiltinType` that matches `<number_type>`,
-    // (for example `I32` or `F64`).
-    ($(($type_name: ident, $number_type: ident, $marker: ident),)+) => {
+    // `(<type_name>, <number_type>, <marker>, <default>)` followed by a comma.
+    // - `<type_name>` is one of `Int` or `Decimal`, used for matching "private"
+    //   branches but also used in `_ImplDecode` as the variant for `Literal`.
+    // - `<number_type>` is a Rust type (for example `i32` or `f64`),
+    // - `<marker>` is the variant of `BuiltinType` that matches `<number_type>`,
+    //   for example `I32` or `F64`,
+    // - `<default>` is a hard-coded expression that will be used when
+    //   a value does not parse into the `<number_type>`.
+    ($(($type_name: ident, $number_type: ident, $marker: ident, $default: expr),)+) => {
         // Repeat this recursion for every matched pattern, where the pattern
         // is in parentheses followed by a comma as described above.
         $(
-            impl_number!($type_name, $number_type, $marker);
+            impl_number!(_ImplFrom, $type_name, $number_type, $marker);
+            impl_number!(_ImplDecode, $type_name, $number_type, $marker, $default);
         )*
         // The asterisk will repeat the contents inside parentheses zero-or-more
         // times, as many times as the left-hand side of the pattern branch has matched
         // a pair of parentheses with arguments described.
     };
-    // Matches one pattern of `(Integer, <number_type>, <marker>)`,
-    // with `Integer` in the position of `<type_name>`.
-    // This is called recursively by the first match pattern.
-    // Handles the implementation of `TryFrom<&Integer>` when `<type_name>` is `Integer`
+    // This is a "private" pattern that matches
+    // one pattern of `(_ImplFrom, Int, <number_type>, <marker>)`
+    // This is called recursively by the first match pattern
+    // where `Int` is in the position of `<type_name>`.
+    // Handles the implementation of `TryFrom<&Integer>` when `<type_name>` is `Int`
     // for the `<number_type>` (a Rust type),
     // where `<marker_type>` corresponds to `<number_type>`.
-    (Integer, $number_type: ident, $marker: ident) => {
+    (_ImplFrom, Int, $number_type: ident, $marker: ident) => {
         impl TryFrom<&Integer> for $number_type {
             type Error = <$number_type as FromStr>::Err;
             fn try_from(val: &Integer) -> Result<$number_type, <$number_type as FromStr>::Err>
@@ -45,18 +50,16 @@ macro_rules! impl_number {
                 }
             }
         }
-
-        // Because `<number_type>` is `Integer` it cannot be used as the `<lit_variant>`
-        // and must be renamed to `Int` and passed recursively.
-        impl_number!(_ImplDecode, Int, $number_type, $marker, 0);
     };
-    // Matches one pattern of `(Decimal, <number_type>, <marker>)`
+    // This is a "private" pattern that matches
+    // one pattern of `(_ImplFrom, Decimal, <number_type>, <marker>)`
     // with `Decimal` in the position of `<type_name>`.
-    // This is called recursively by the first match pattern.
+    // This is called recursively by the first match pattern
+    // where `Decimal` is in the position of `<type_name>`.
     // Handles the implementation of `TryFrom<&Decimal>` when `<type_name>` is `Decimal`
     // for the `<number_type>` (a Rust type),
     // where `<marker_type>` corresponds to `<number_type>`.
-    (Decimal, $number_type: ident, $marker: ident) => {
+    (_ImplFrom, Decimal, $number_type: ident, $marker: ident) => {
         impl TryFrom<&Decimal> for $number_type {
             type Error = <$number_type as FromStr>::Err;
             fn try_from(val: &Decimal) -> Result<$number_type, <$number_type as FromStr>::Err>
@@ -64,27 +67,17 @@ macro_rules! impl_number {
                 <$number_type>::from_str(&val.0)
             }
         }
-
-        // Because `<number_type>` is `Decimal` it could be used as the `<lit_variant>`,
-        // but to be consistent with the branch where `<number_type>` is `Integer`,
-        // it is named directly as `Decimal`.
-        impl_number!(_ImplDecode, Decimal, $number_type, $marker, 0.0);
     };
     // This is a "private" pattern that matches
-    // one pattern of `(_ImplDecode, <lit_variant>, <number_type>, <marker>, <default>)`
-    // where `<lit_variant>` is a variant of `Literal`, passed by a previous branch that
-    // matched a `<type_name>`,
-    // and `<number_type>` and `<marker>` are described above on the first pattern,
-    // and the additional `<default>` is a hard-coded literal
-    // that will be used when a value does not parse into the `<number_type>`.
+    // one pattern of `(_ImplDecode, <type_name>, <number_type>, <marker>, <default>)`
     // Handles the implementation of `DecodeScalar` for the `<number_type>`.
-    (_ImplDecode, $lit_variant: ident, $number_type: ident, $marker: ident, $default: expr) => {
+    (_ImplDecode, $type_name: ident, $number_type: ident, $marker: ident, $default: expr) => {
         impl<S: ErrorSpan> DecodeScalar<S> for $number_type {
             fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
                 -> Result<$number_type, DecodeError<S>>
             {
                 match &**val {
-                    Literal::$lit_variant(ref value) => {
+                    Literal::$type_name(ref value) => {
                         match value.try_into() {
                             Ok(val) => Ok(val),
                             Err(e) => {
@@ -120,18 +113,18 @@ macro_rules! impl_number {
 }
 
 impl_number!(
-    (Integer, i8, I8),
-    (Integer, u8, U8),
-    (Integer, i16, I16),
-    (Integer, u16, U16),
-    (Integer, i32, I32),
-    (Integer, u32, U32),
-    (Integer, i64, I64),
-    (Integer, u64, U64),
-    (Integer, isize, Isize),
-    (Integer, usize, Usize),
-    (Decimal, f32, F32),
-    (Decimal, f64, F64),
+    (Int, i8, I8, 0),
+    (Int, u8, U8, 0),
+    (Int, i16, I16, 0),
+    (Int, u16, U16, 0),
+    (Int, i32, I32, 0),
+    (Int, u32, U32, 0),
+    (Int, i64, I64, 0),
+    (Int, u64, U64, 0),
+    (Int, isize, Isize, 0),
+    (Int, usize, Usize, 0),
+    (Decimal, f32, F32, 0.0),
+    (Decimal, f64, F64, 0.0),
 );
 
 impl<S: ErrorSpan> DecodeScalar<S> for String {
