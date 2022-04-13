@@ -13,7 +13,7 @@ macro_rules! impl_number {
     // Matches a repeating pattern of
     // `(<type_name>, <number_type>, <marker>, <default>)` followed by a comma.
     // - `<type_name>` is one of `Int` or `Decimal`, used for matching "private"
-    //   branches but also used in `_ImplDecode` as the variant for `Literal`.
+    //   branches but also used in `@scalar_decode` as the variant for `Literal`.
     // - `<number_type>` is a Rust type (for example `i32` or `f64`),
     // - `<marker>` is the variant of `BuiltinType` that matches `<number_type>`,
     //   for example `I32` or `F64`,
@@ -23,21 +23,21 @@ macro_rules! impl_number {
         // Repeat this recursion for every matched pattern, where the pattern
         // is in parentheses followed by a comma as described above.
         $(
-            impl_number!(_ImplFrom, $type_name, $number_type, $marker);
-            impl_number!(_ImplDecode, $type_name, $number_type, $marker, $default);
+            impl_number!(@try_from, $type_name, $number_type, $marker);
+            impl_number!(@decode_scalar, $type_name, $number_type, $marker, $default);
         )*
         // The asterisk will repeat the contents inside parentheses zero-or-more
         // times, as many times as the left-hand side of the pattern branch has matched
         // a pair of parentheses with arguments described.
     };
     // This is a "private" pattern that matches
-    // one pattern of `(_ImplFrom, Int, <number_type>, <marker>)`
+    // one pattern of `(@try_from, Int, <number_type>, <marker>)`
     // This is called recursively by the first match pattern
     // where `Int` is in the position of `<type_name>`.
     // Handles the implementation of `TryFrom<&Integer>` when `<type_name>` is `Int`
     // for the `<number_type>` (a Rust type),
     // where `<marker_type>` corresponds to `<number_type>`.
-    (_ImplFrom, Int, $number_type: ident, $marker: ident) => {
+    (@try_from, Int, $number_type: ident, $marker: ident) => {
         impl TryFrom<&Integer> for $number_type {
             type Error = <$number_type as FromStr>::Err;
             fn try_from(val: &Integer) -> Result<$number_type, <$number_type as FromStr>::Err>
@@ -52,14 +52,14 @@ macro_rules! impl_number {
         }
     };
     // This is a "private" pattern that matches
-    // one pattern of `(_ImplFrom, Decimal, <number_type>, <marker>)`
+    // one pattern of `(@try_from, Decimal, <number_type>, <marker>)`
     // with `Decimal` in the position of `<type_name>`.
     // This is called recursively by the first match pattern
     // where `Decimal` is in the position of `<type_name>`.
     // Handles the implementation of `TryFrom<&Decimal>` when `<type_name>` is `Decimal`
     // for the `<number_type>` (a Rust type),
     // where `<marker_type>` corresponds to `<number_type>`.
-    (_ImplFrom, Decimal, $number_type: ident, $marker: ident) => {
+    (@try_from, Decimal, $number_type: ident, $marker: ident) => {
         impl TryFrom<&Decimal> for $number_type {
             type Error = <$number_type as FromStr>::Err;
             fn try_from(val: &Decimal) -> Result<$number_type, <$number_type as FromStr>::Err>
@@ -69,9 +69,9 @@ macro_rules! impl_number {
         }
     };
     // This is a "private" pattern that matches
-    // one pattern of `(_ImplDecode, <type_name>, <number_type>, <marker>, <default>)`
+    // one pattern of `(@scalar_decode, <type_name>, <number_type>, <marker>, <default>)`
     // Handles the implementation of `DecodeScalar` for the `<number_type>`.
-    (_ImplDecode, $type_name: ident, $number_type: ident, $marker: ident, $default: expr) => {
+    (@decode_scalar, $type_name: ident, $number_type: ident, $marker: ident, $default: expr) => {
         impl<S: ErrorSpan> DecodeScalar<S> for $number_type {
             fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
                 -> Result<$number_type, DecodeError<S>>
