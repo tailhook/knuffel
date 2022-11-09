@@ -140,9 +140,9 @@ Properties can be optional:
 ```rust
 #[derive(knuffel::Decode)]
 struct MyNode {
-    #[knuffel(argument)]
+    #[knuffel(property)]
     name: Option<String>,
-    #[knuffel(argument)]
+    #[knuffel(property)]
     enabled: Option<bool>,
 }
 ```
@@ -158,10 +158,10 @@ must use `Option` in this specific notation. Other variations like this:
 use std::option::Option as Opt;
 #[derive(knuffel::Decode)]
 struct MyNode {
-    #[knuffel(argument)]
-    first: ::std::option::Option<String>,
-    #[knuffel(argument)]
-    second: Opt<bool>,
+    #[knuffel(property)]
+    name: ::std::option::Option<String>,
+    #[knuffel(property)]
+    enabled: Opt<bool>,
 }
 ```
 Do not work (they will always require `property=null`).
