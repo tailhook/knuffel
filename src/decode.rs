@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
 use crate::ast::{Literal, BuiltinType, Value, SpannedNode};
 use crate::errors::{DecodeError, ExpectedType};
 use crate::traits::{ErrorSpan, Decode};
@@ -53,7 +55,7 @@ pub fn bytes<S: ErrorSpan>(value: &Value<S>, ctx: &mut Context<S>) -> Vec<u8> {
                 #[cfg(feature="base64")] {
                     match &*value.literal {
                         Literal::String(s) => {
-                            match base64::decode(s.as_bytes()) {
+                            match STANDARD.decode(s.as_bytes()) {
                                 Ok(vec) => vec,
                                 Err(e) => {
                                     ctx.emit_error(DecodeError::conversion(
