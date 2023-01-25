@@ -20,8 +20,8 @@ use crate::traits::{ErrorSpan, Span};
 /// Implements [`miette::Diagnostic`] so can be used to print nice error
 /// output with code snippets.
 ///
-/// See [crate documentation](crate#Errors) and [miette} documentation to
-/// find out how deal with them.
+/// See [crate documentation](crate#Errors) and [miette] documentation to
+/// find out how to deal with them.
 #[derive(Debug, Diagnostic, Error)]
 #[error("error parsing KDL")]
 pub struct Error {
