@@ -592,9 +592,9 @@ plugin {
 
 There are few limitations of the `flatten`:
 1. All fields in target structure must be optional.
-2. The target structure must implement [`Default`](std::default::Default)
-3. Only children an properties can be factored out, not arguments in current
-   implementation
+2. The target structure must implement [`Default`](std::default::Default).
+3. Only children or properties can be factored out, not arguments in current
+   implementation.
 4. You must specify which directives can be used in the target structure
     (i.e. `flatten(child, children, property, properties)`) and if `children`
     or `properties` are forwarded to the target structure, no more children
