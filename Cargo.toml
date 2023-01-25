@@ -16,7 +16,7 @@ keywords = ["kdl", "configuration", "parser"]
 categories = ["parser-implementations", "config", "encoding"]
 homepage = "https://github.com/tailhook/knuffel"
 documentation = "https://docs.rs/knuffel"
-rust-version = "1.60.0"
+rust-version = "1.62.0"
 readme = "README.md"
 
 [dependencies]
