@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
 
+#[cfg(feature="base64")] 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use crate::ast::{Literal, BuiltinType, Value, SpannedNode};
