@@ -293,19 +293,19 @@ mod cbor {
     use minicbor::encode::Encode;
     use minicbor::decode::Decode;
 
-    impl<'d> Decode<'d> for TypeName {
-        fn decode(d: &mut Decoder<'d>)
+    impl<'d, C> Decode<'d, C> for TypeName {
+        fn decode(d: &mut Decoder<'d>, _: &mut C)
             -> Result<Self, minicbor::decode::Error>
         {
             d.str().and_then(|s| s.parse().map_err(|e| match e {}))
         }
     }
-    impl Encode for TypeName {
-        fn encode<W>(&self, e: &mut Encoder<W>)
+    impl<C> Encode<C> for TypeName {
+        fn encode<W>(&self, e: &mut Encoder<W>, ctx: &mut C)
             -> Result<(), minicbor::encode::Error<W::Error>>
             where W: minicbor::encode::write::Write
         {
-            self.as_str().encode(e)
+            self.as_str().encode(e, ctx)
         }
     }
 }
