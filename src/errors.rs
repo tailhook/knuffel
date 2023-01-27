@@ -97,7 +97,7 @@ pub enum DecodeError<S: ErrorSpan> {
     /// Unexpected entity encountered
     ///
     /// This is emitted for entities (arguments, properties, children) that have
-    /// to matching structure field to put into, and also for nodes that aren
+    /// to matching structure field to put into, and also for nodes that aren't
     /// expected to be encountered twice.
     #[diagnostic()]
     #[error("{}", message)]
