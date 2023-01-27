@@ -159,6 +159,14 @@ impl<S: ErrorSpan, T: Decode<S>> DecodeChildren<S> for Vec<T> {
     }
 }
 
+impl<S: ErrorSpan, T: Decode<S>> Decode<S> for Option<T> {
+    fn decode_node(node: &SpannedNode<S>, ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        Decode::decode_node(node, ctx).map(|node| Some(node))
+    }
+}
+
 impl<S: ErrorSpan, T: DecodeScalar<S>> DecodeScalar<S> for Option<T> {
     fn type_check(type_name: &Option<Spanned<TypeName, S>>,
                   ctx: &mut Context<S>) {
@@ -170,6 +178,24 @@ impl<S: ErrorSpan, T: DecodeScalar<S>> DecodeScalar<S> for Option<T> {
         match &**value {
             Literal::Null => Ok(None),
             _ => DecodeScalar::raw_decode(value, ctx).map(Some),
+        }
+    }
+}
+
+impl<S: ErrorSpan, T: Decode<S>> DecodeChildren<S> for Option<T> {
+    fn decode_children(nodes: &[SpannedNode<S>], ctx: &mut Context<S>)
+        -> Result<Self, DecodeError<S>>
+    {
+        match nodes.len() {
+            0 => Ok(None),
+            1 => Decode::decode_node(&nodes[0], ctx),
+            _ => {
+                Err(DecodeError::unexpected(
+                    &nodes[1],
+                    "kind",
+                    "Option"
+                ))
+            }
         }
     }
 }
