@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::path::PathBuf;
 use std::default::Default;
 
-use crate::ast::{Literal, Integer, Radix, TypeName, BuiltinType};
+use crate::ast::{Literal, Integer, Decimal, Radix, TypeName, BuiltinType};
 use crate::decode::{Context, Kind};
 use crate::errors::{DecodeError, ExpectedType};
 use crate::span::{Spanned};
@@ -74,6 +74,59 @@ impl_integer!(i64, I64);
 impl_integer!(u64, U64);
 impl_integer!(isize, Isize);
 impl_integer!(usize, Usize);
+
+macro_rules! impl_decimal {
+    ($typ: ident, $marker: ident) => {
+        impl TryFrom<&Decimal> for $typ {
+            type Error = <$typ as FromStr>::Err;
+            fn try_from(val: &Decimal) -> Result<$typ, <$typ as FromStr>::Err>
+            {
+                <$typ>::from_str(&val.0)
+            }
+        }
+
+        impl<S: ErrorSpan> DecodeScalar<S> for $typ {
+            fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
+                -> Result<$typ, DecodeError<S>>
+            {
+                match &**val {
+                    Literal::Decimal(ref value) => {
+                        match value.try_into() {
+                            Ok(val) => Ok(val),
+                            Err(e) => {
+                                ctx.emit_error(DecodeError::conversion(val, e));
+                                Ok(0.0)
+                            }
+                        }
+                    }
+                    _ => {
+                        ctx.emit_error(DecodeError::scalar_kind(
+                                Kind::String, val));
+                        Ok(0.0)
+                    }
+                }
+            }
+            fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                          ctx: &mut Context<S>)
+            {
+                if let Some(typ) = type_name {
+                    if typ.as_builtin() != Some(&BuiltinType::$marker) {
+                        ctx.emit_error(DecodeError::TypeName {
+                            span: typ.span().clone(),
+                            found: Some(typ.value.clone()),
+                            expected: ExpectedType::optional(
+                                BuiltinType::$marker),
+                            rust_type: stringify!($typ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl_decimal!(f32, F32);
+impl_decimal!(f64, F64);
 
 impl<S: ErrorSpan> DecodeScalar<S> for String {
     fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
