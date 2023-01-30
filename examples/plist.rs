@@ -19,7 +19,7 @@ pub enum Element {
     Data(#[knuffel(argument, bytes)] Vec<u8>),
     Date(#[knuffel(argument, str)] NaiveDateTime),
     Dict(Box<Dict>),
-    Real(#[knuffel(argument)] i32),  // TODO f32
+    Real(#[knuffel(argument)] f32),
     Integer(#[knuffel(argument)] i32),
     String(#[knuffel(argument)] String),
     True,
