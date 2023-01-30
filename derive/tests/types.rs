@@ -36,7 +36,7 @@ fn parse_enum() {
         Scalars {
             str: "hello".into(),
             u64: 1234,
-            f64: 1.234
+            f64: 1.234,
             path: PathBuf::from("/hello/world"),
             boolean: true,
         });
