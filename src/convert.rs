@@ -37,7 +37,7 @@ macro_rules! impl_integer {
                                 Ok(0)
                             }
                         }
-                    }
+                    },
                     _ => {
                         ctx.emit_error(DecodeError::scalar_kind(
                                 Kind::String, val));
@@ -77,6 +77,14 @@ impl_integer!(usize, Usize);
 
 macro_rules! impl_decimal {
     ($typ: ident, $marker: ident) => {
+        impl TryFrom<&Integer> for $typ {
+            type Error = <$typ as FromStr>::Err;
+            fn try_from(val: &Integer) -> Result<$typ, <$typ as FromStr>::Err>
+            {
+                <$typ>::from_str(&val.1)
+            }
+        }
+
         impl TryFrom<&Decimal> for $typ {
             type Error = <$typ as FromStr>::Err;
             fn try_from(val: &Decimal) -> Result<$typ, <$typ as FromStr>::Err>
@@ -90,6 +98,15 @@ macro_rules! impl_decimal {
                 -> Result<$typ, DecodeError<S>>
             {
                 match &**val {
+                    Literal::Int(ref value) => {
+                        match value.try_into() {
+                            Ok(val) => Ok(val),
+                            Err(e) => {
+                                ctx.emit_error(DecodeError::conversion(val, e));
+                                Ok(0.0)
+                            }
+                        }
+                    },
                     Literal::Decimal(ref value) => {
                         match value.try_into() {
                             Ok(val) => Ok(val),
@@ -98,7 +115,7 @@ macro_rules! impl_decimal {
                                 Ok(0.0)
                             }
                         }
-                    }
+                    },
                     _ => {
                         ctx.emit_error(DecodeError::scalar_kind(
                                 Kind::String, val));
