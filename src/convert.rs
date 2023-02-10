@@ -37,7 +37,7 @@ macro_rules! impl_integer {
                                 Ok(0)
                             }
                         }
-                    },
+                    }
                     _ => {
                         ctx.emit_error(DecodeError::scalar_kind(
                                 Kind::String, val));
@@ -106,7 +106,7 @@ macro_rules! impl_decimal {
                                 Ok(0.0)
                             }
                         }
-                    },
+                    }
                     Literal::Decimal(ref value) => {
                         match value.try_into() {
                             Ok(val) => Ok(val),
@@ -115,7 +115,7 @@ macro_rules! impl_decimal {
                                 Ok(0.0)
                             }
                         }
-                    },
+                    }
                     _ => {
                         ctx.emit_error(DecodeError::scalar_kind(
                                 Kind::String, val));
