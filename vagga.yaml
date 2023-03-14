@@ -25,13 +25,28 @@ commands:
     container: nightly
     run: [cargo, expand]
 
-  test: !Command
-    description: Run tests
+  test-rust: !Command
+    description: Run test suite
     container: ubuntu
     run: [cargo, test, --workspace]
     volumes:
       /tmp: !Tmpfs
         size: 1Gi
+
+  test-rust-all-features: !Command
+    description: Run tests with all features enabled
+    container: ubuntu
+    run: [cargo, test, --workspace, --all-features]
+    volumes:
+      /tmp: !Tmpfs
+        size: 1Gi
+
+
+  test: !Command
+    description: Run all tests
+    container: ubuntu
+    prerequisites: [test-rust, test-rust-all-features]
+    run: [echo, Ok]
 
 containers:
 
