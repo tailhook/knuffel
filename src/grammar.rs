@@ -8,6 +8,36 @@ use crate::span::{Spanned};
 use crate::traits::{Span};
 use crate::errors::{ParseError as Error, TokenFormat};
 
+use chumsky::combinator::{Map, Then};
+use chumsky::chain::Chain;
+
+trait ChainChar<I: Clone, O> {
+    type Error;
+    fn chain_c<U, P>(
+        self,
+        other: P
+    ) -> Map<Then<Self, P>, fn(_: (O, U)) -> Vec<char>, (O, U)>where
+        Self: Sized,
+        U: Chain<char>,
+        O: Chain<char>,
+        P: Parser<I, U, Error = Self::Error>;
+}
+
+impl<I: Clone, O, R: Parser<I, O>> ChainChar<I, O> for R {
+    type Error = <R as Parser<I, O>>::Error;
+    fn chain_c<U, P>(
+        self,
+        other: P
+    ) -> Map<Then<Self, P>, fn(_: (O, U)) -> Vec<char>, (O, U)>where
+        Self: Sized,
+        U: Chain<char>,
+        O: Chain<char>,
+        P: Parser<I, U, Error = Self::Error>
+    {
+        Parser::chain(self, other)
+    }
+}
+
 
 fn begin_comment<S: Span>(which: char)
     -> impl Parser<char, (), Error=Error<S>> + Clone
@@ -302,11 +332,12 @@ fn digits<S: Span>(radix: u32) -> impl Parser<char, Vec<char>, Error=Error<S>> {
 
 fn decimal_number<S: Span>() -> impl Parser<char, Literal, Error=Error<S>> {
     just('-').or(just('+')).or_not()
-    .chain(digit(10)).chain(digits(10))
-    .chain(just('.').chain(digit(10)).chain(digits(10)).or_not().flatten())
-    .chain(just('e').or(just('E'))
-           .chain(just('-').or(just('+')).or_not())
-           .chain(digits(10)).or_not().flatten())
+    .chain_c(digit(10)).chain_c(digits(10))
+    .chain_c(
+        just('.').chain_c(digit(10)).chain_c(digits(10)).or_not().flatten())
+    .chain_c(just('e').or(just('E'))
+           .chain_c(just('-').or(just('+')).or_not())
+           .chain_c(digits(10)).or_not().flatten())
     .map(|v| {
         let is_decimal = v.iter().any(|c| matches!(c, '.'|'e'|'E'));
         let s: String = v.into_iter().filter(|c| c != &'_').collect();
