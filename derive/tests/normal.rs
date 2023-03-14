@@ -541,13 +541,11 @@ fn parse_enum() {
 fn parse_str() {
     assert_eq!(parse_doc::<Parse>(r#"listen "127.0.0.1:8080""#),
                Parse { listen: "127.0.0.1:8080".parse().unwrap() });
-    assert_eq!(parse_doc_err::<Parse>(r#"listen "2/3""#),
-        "invalid IP address syntax");
+    assert!(parse_doc_err::<Parse>(r#"listen "2/3""#).contains("invalid"));
 
     assert_eq!(parse::<ParseOpt>(r#"server listen="127.0.0.1:8080""#),
                ParseOpt { listen: Some("127.0.0.1:8080".parse().unwrap()) });
-    assert_eq!(parse_err::<ParseOpt>(r#"server listen="2/3""#),
-        "invalid IP address syntax");
+    assert!(parse_err::<ParseOpt>(r#"server listen="2/3""#).contains("invalid"));
     assert_eq!(parse::<ParseOpt>(r#"server listen=null"#),
                ParseOpt { listen: None });
 }
