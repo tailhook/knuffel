@@ -1,3 +1,4 @@
+use std::fmt;
 use std::mem;
 
 use proc_macro2::{TokenStream, Span};
@@ -74,7 +75,7 @@ pub enum Attr {
 #[derive(Debug, Clone)]
 pub struct FieldAttrs {
     pub mode: Option<FieldMode>,
-    pub decode: Option<DecodeMode>,
+    pub decode: Option<(DecodeMode, Span)>,
     pub unwrap: Option<Box<FieldAttrs>>,
     pub default: Option<Option<syn::Expr>>,
 }
@@ -408,7 +409,8 @@ impl StructBuilder {
                 self.arguments.push(Arg {
                     field,
                     kind: ArgKind::Value { option: is_option },
-                    decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    decode: attrs.decode.as_ref().map(|(v, _)| v.clone())
+                        .unwrap_or(DecodeMode::Normal),
                     default: attrs.default.clone(),
                     option: is_option,
                 });
@@ -421,7 +423,8 @@ impl StructBuilder {
                 }
                 self.var_args = Some(VarArgs {
                     field,
-                    decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    decode: attrs.decode.as_ref().map(|(v, _)| v.clone())
+                        .unwrap_or(DecodeMode::Normal),
                 });
             }
             Some(FieldMode::Property { name }) => {
@@ -444,7 +447,8 @@ impl StructBuilder {
                     field,
                     name,
                     option: is_option,
-                    decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    decode: attrs.decode.as_ref().map(|(v, _)| v.clone())
+                        .unwrap_or(DecodeMode::Normal),
                     flatten: false,
                     default: attrs.default.clone(),
                 });
@@ -457,10 +461,12 @@ impl StructBuilder {
                 }
                 self.var_props = Some(VarProps {
                     field,
-                    decode: attrs.decode.clone().unwrap_or(DecodeMode::Normal),
+                    decode: attrs.decode.as_ref().map(|(v, _)| v.clone())
+                        .clone().unwrap_or(DecodeMode::Normal),
                 });
             }
             Some(FieldMode::Child) => {
+                attrs.no_decode("children");
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
                         "extra `child` after capture all `children`",
@@ -489,6 +495,7 @@ impl StructBuilder {
                 });
             }
             Some(FieldMode::Children { name: Some(name) }) => {
+                attrs.no_decode("children");
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
                         "extra `children(name=` after capture all `children`",
@@ -504,6 +511,7 @@ impl StructBuilder {
                 });
             }
             Some(FieldMode::Children { name: None }) => {
+                attrs.no_decode("children");
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
                         "only single catch all `children` is allowed",
@@ -519,6 +527,7 @@ impl StructBuilder {
                     return Err(syn::Error::new(field.span,
                         "optional flatten fields are not supported yet"));
                 }
+                attrs.no_decode("children");
                 if flatten.property {
                     if let Some(prev) = &self.var_props {
                         return Err(err_pair(&field, &prev.field,
@@ -553,12 +562,15 @@ impl StructBuilder {
                 }
             }
             Some(FieldMode::Span) => {
+                attrs.no_decode("span");
                 self.spans.push(SpanField { field });
             }
             Some(FieldMode::NodeName) => {
+                attrs.no_decode("node_name");
                 self.node_names.push(NodeNameField { field });
             }
             Some(FieldMode::TypeName) => {
+                attrs.no_decode("type_name");
                 self.type_names.push(TypeNameField {
                     field,
                     option: is_option,
@@ -705,7 +717,7 @@ impl FieldAttrs {
                             "only single attribute that defines parser of the \
                             field is allowed");
                     }
-                    self.decode = Some(mode);
+                    self.decode = Some((mode, span));
 
                 }
                 Default(value) => {
@@ -717,6 +729,22 @@ impl FieldAttrs {
                 }
                 _ => emit_error!(span,
                     "this attribute is not supported on fields"),
+            }
+        }
+    }
+
+    fn no_decode(&self, element: &str) {
+        if let Some((mode, span)) = self.decode.as_ref() {
+            if self.unwrap.is_some() {
+                emit_error!(span,
+                    "decode modes are not supported on {}", element;
+                    hint= span.clone() => "try putting decode mode \
+                                          into unwrap(.., {})", mode;
+                );
+            } else {
+                emit_error!(span,
+                    "decode modes are not supported on {}", element
+                );
             }
         }
     }
@@ -765,7 +793,8 @@ fn parse_attrs(input: ParseStream)
 
 impl Attr {
     fn parse(input: ParseStream) -> syn::Result<(Self, Span)> {
-        Self::_parse(input).map(|a| (a, input.span()))
+        let span = input.span();
+        Self::_parse(input).map(|a| (a, span))
     }
     fn _parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
@@ -941,5 +970,17 @@ impl Field {
                 Some(quote!(#n: #tmp_name))
             }
         }
+    }
+}
+
+impl fmt::Display for DecodeMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use DecodeMode::*;
+
+        match self {
+            Normal => "normal",
+            Str => "str",
+            Bytes => "bytes",
+        }.fmt(f)
     }
 }
