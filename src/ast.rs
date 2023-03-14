@@ -135,6 +135,10 @@ pub enum BuiltinType {
     Usize,
     /// `isize`: platform-dependent signed integer type
     Isize,
+    /// `f32`: 32-bit floating point number
+    F32,
+    /// `f64`: 64-bit floating point number
+    F64,
     /// `base64` denotes binary bytes type encoded using base64 encoding
     Base64,
 }
@@ -198,6 +202,8 @@ impl BuiltinType {
             I64 => "i64",
             Usize => "usize",
             Isize => "isize",
+            F32 => "f32",
+            F64 => "f64",
             Base64 => "base64",
         }
     }
@@ -250,6 +256,8 @@ impl FromStr for BuiltinType {
             "i32" => Ok(I32),
             "u64" => Ok(U64),
             "i64" => Ok(I64),
+            "f32" => Ok(F32),
+            "f64" => Ok(F64),
             "base64" => Ok(Base64),
             _ => Err(())
         }
