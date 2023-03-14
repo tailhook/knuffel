@@ -557,7 +557,7 @@ fn parse_bytes() {
     assert_eq!(parse_doc::<Bytes>(r#"data "world""#),
                Bytes { data: b"world".to_vec() });
     assert_eq!(parse_doc_err::<Bytes>(r#"data (base64)"2/3""#),
-        "Invalid last symbol 51, offset 2.");
+        "Invalid padding");
 
     assert_eq!(parse::<OptBytes>(r#"node data=(base64)"aGVsbG8=""#),
                OptBytes { data: Some(b"hello".to_vec()) });
