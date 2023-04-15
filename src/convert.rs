@@ -1,6 +1,7 @@
-use std::str::FromStr;
-use std::path::PathBuf;
 use std::default::Default;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::ast::{Literal, Integer, Decimal, Radix, TypeName, BuiltinType};
 use crate::decode::{Context, Kind};
@@ -176,6 +177,58 @@ impl<S: ErrorSpan> DecodeScalar<S> for PathBuf {
                 found: Some(typ.value.clone()),
                 expected: ExpectedType::no_type(),
                 rust_type: "PathBuf",
+            });
+        }
+    }
+}
+
+impl<S: ErrorSpan> DecodeScalar<S> for Arc<Path> {
+    fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
+        -> Result<Arc<Path>, DecodeError<S>>
+    {
+        match &**val {
+            Literal::String(ref s) => Ok(PathBuf::from(&(**s)[..]).into()),
+            _ => {
+                ctx.emit_error(DecodeError::scalar_kind(Kind::String, val));
+                Ok(PathBuf::default().into())
+            }
+        }
+    }
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                  ctx: &mut Context<S>)
+    {
+        if let Some(typ) = type_name {
+            ctx.emit_error(DecodeError::TypeName {
+                span: typ.span().clone(),
+                found: Some(typ.value.clone()),
+                expected: ExpectedType::no_type(),
+                rust_type: "Arc<Path>",
+            });
+        }
+    }
+}
+
+impl<S: ErrorSpan> DecodeScalar<S> for Arc<str> {
+    fn raw_decode(val: &Spanned<Literal, S>, ctx: &mut Context<S>)
+        -> Result<Arc<str>, DecodeError<S>>
+    {
+        match &**val {
+            Literal::String(ref s) => Ok(s.clone().into()),
+            _ => {
+                ctx.emit_error(DecodeError::scalar_kind(Kind::String, val));
+                Ok(String::default().into())
+            }
+        }
+    }
+    fn type_check(type_name: &Option<Spanned<TypeName, S>>,
+                  ctx: &mut Context<S>)
+    {
+        if let Some(typ) = type_name {
+            ctx.emit_error(DecodeError::TypeName {
+                span: typ.span().clone(),
+                found: Some(typ.value.clone()),
+                expected: ExpectedType::no_type(),
+                rust_type: "Arc<str>",
             });
         }
     }
