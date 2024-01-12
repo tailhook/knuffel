@@ -56,18 +56,24 @@ pub struct Document<S> {
     pub nodes: Vec<SpannedNode<S>>,
 }
 
+/// Possible integer radices described by the KDL specification
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 #[cfg_attr(feature="minicbor", cbor(index_only))]
-pub(crate) enum Radix {
+pub enum Radix {
+    /// Binary (Base 2)
     #[cfg_attr(feature="minicbor", n(2))]
     Bin,
-    #[cfg_attr(feature="minicbor", n(16))]
-    Hex,
+    /// Octal (Base 8)
     #[cfg_attr(feature="minicbor", n(8))]
     Oct,
+    /// Decimal (Base 10)
     #[cfg_attr(feature="minicbor", n(10))]
     Dec,
+    /// Hexadecimal (Base 16)
+    #[cfg_attr(feature="minicbor", n(16))]
+    Hex,
 }
 
 /// Potentially unlimited size integer value
@@ -75,9 +81,9 @@ pub(crate) enum Radix {
 #[cfg_attr(feature="minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Integer(
     #[cfg_attr(feature="minicbor", n(0))]
-    pub(crate) Radix,
+    pub Radix,
     #[cfg_attr(feature="minicbor", n(1))]
-    pub(crate) Box<str>,
+    pub Box<str>,
 );
 
 /// Potentially unlimited precision decimal value
@@ -86,7 +92,7 @@ pub struct Integer(
 #[cfg_attr(feature="minicbor", cbor(transparent))]
 pub struct Decimal(
     #[cfg_attr(feature="minicbor", n(0))]
-    pub(crate) Box<str>,
+    pub Box<str>,
 );
 
 /// Possibly typed KDL scalar value
