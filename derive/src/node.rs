@@ -625,7 +625,7 @@ fn decode_node(common: &Common, child_def: &Child, in_partial: bool,
         (quote!(), quote!(::knuffel::Decode::decode_node))
     };
     let value = syn::Ident::new("value", Span::mixed_site());
-    let assign = if matches!(child_def.mode, ChildMode::Multi) {
+    let assign = if matches!(child_def.mode, ChildMode::Multi { .. }) {
         quote!(#dest.push(#value))
     } else {
         quote!(#dest = Some(#value))
@@ -780,7 +780,7 @@ fn decode_children(s: &Common, children: &syn::Ident,
                     ) => None,
                 })
             }
-            ChildMode::Multi => {
+            ChildMode::Multi { non_empty } => {
                 declare_empty.push(quote! {
                     let mut #fld = Vec::new();
                 });
@@ -788,40 +788,59 @@ fn decode_children(s: &Common, children: &syn::Ident,
                 match_branches.push(quote! {
                     #child_name => #decode,
                 });
+                let collect_expr = if child_def.option {
+                    quote! { Some(#fld.into_iter().collect()) }
+                } else {
+                    quote! { #fld.into_iter().collect() }
+                };
                 if let Some(default_value) = &child_def.default {
                     let default = if let Some(expr) = default_value {
                         quote!(#expr)
                     } else {
                         quote!(::std::default::Default::default())
                     };
-                    if child_def.option {
-                        postprocess.push(quote! {
-                            let #fld = if #fld.is_empty() {
-                                #default
-                            } else {
-                                Some(#fld.into_iter().collect())
-                            };
-                        });
+                    postprocess.push(quote! {
+                        let #fld = if #fld.is_empty() {
+                            #default
+                        } else {
+                            #collect_expr
+                        };
+                    });
+                } else if non_empty {
+                    let req_msg = format!(
+                        "at least one child node `{}` is required",
+                        child_name);
+                    let error_expr = if let Some(span) = &err_span {
+                        quote! {
+                            ::knuffel::errors::DecodeError::Missing {
+                                span: #span.clone(),
+                                message: #req_msg.into(),
+                            }
+                        }
                     } else {
-                        postprocess.push(quote! {
-                            let #fld = if #fld.is_empty() {
-                                #default
-                            } else {
-                                #fld.into_iter().collect()
-                            };
-                        });
-                    }
+                        quote! {
+                            ::knuffel::errors::DecodeError::MissingNode {
+                                message: #req_msg.into(),
+                            }
+                        }
+                    };
+                    postprocess.push(quote! {
+                        if #fld.is_empty() {
+                            return Err(#error_expr);
+                        }
+                        let #fld = #collect_expr;
+                    });
                 } else if child_def.option {
                     postprocess.push(quote! {
                         let #fld = if #fld.is_empty() {
                             None
                         } else {
-                            Some(#fld.into_iter().collect())
+                            #collect_expr
                         };
                     });
                 } else {
                     postprocess.push(quote! {
-                        let #fld = #fld.into_iter().collect();
+                        let #fld = #collect_expr;
                     });
                 }
             }
@@ -910,6 +929,31 @@ fn decode_children(s: &Common, children: &syn::Ident,
             (quote!(), quote!(::knuffel::Decode::decode_node))
         };
 
+        let non_empty_check = if var_children.non_empty {
+            let req_msg = "at least one child node is required";
+            let error_expr = if let Some(span) = &err_span {
+                quote! {
+                    ::knuffel::errors::DecodeError::Missing {
+                        span: #span.clone(),
+                        message: #req_msg.into(),
+                    }
+                }
+            } else {
+                quote! {
+                    ::knuffel::errors::DecodeError::MissingNode {
+                        message: #req_msg.into(),
+                    }
+                }
+            };
+            quote! {
+                if #children.is_empty() {
+                    return Err(#error_expr);
+                }
+            }
+        } else {
+            Default::default()
+        };
+
         match_branches.push(quote! {
             _ => {
                 #init
@@ -921,6 +965,7 @@ fn decode_children(s: &Common, children: &syn::Ident,
         });
         Ok(quote! {
             #(#declare_empty)*
+            #non_empty_check
             let #fld = #children.iter().flat_map(|#child| {
                 match &**#child.node_name {
                     #(#match_branches)*
