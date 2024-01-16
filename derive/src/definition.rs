@@ -36,7 +36,7 @@ pub enum FieldMode {
     Property { name: Option<String> },
     Arguments,
     Properties,
-    Children { name: Option<String> },
+    Children(Children),
     Child,
     Flatten(Flatten),
     Span,
@@ -44,9 +44,20 @@ pub enum FieldMode {
     TypeName,
 }
 
+pub enum ChildrenItem {
+    Name(String),
+    NonEmpty,
+}
+
 pub enum FlattenItem {
     Child,
     Property,
+}
+
+#[derive(Debug, Clone)]
+pub struct Children {
+    name: Option<String>,
+    non_empty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +153,7 @@ pub struct VarProps {
 pub enum ChildMode {
     Normal,
     Flatten,
-    Multi,
+    Multi { non_empty: bool },
     Bool,
 }
 
@@ -157,6 +168,7 @@ pub struct Child {
 
 pub struct VarChildren {
     pub field: Field,
+    pub non_empty: bool,
     pub unwrap: Option<Box<FieldAttrs>>,
 }
 
@@ -494,7 +506,11 @@ impl StructBuilder {
                     default: attrs.default.clone(),
                 });
             }
-            Some(FieldMode::Children { name: Some(name) }) => {
+            Some(FieldMode::Children(Children { name: Some(name), non_empty })) => {
+                if *non_empty && attrs.default.is_some() {
+                    return Err(syn::Error::new(field.span,
+                        "marking fields `non_empty` has no effect when paired with `default`"));
+                }
                 attrs.no_decode("children");
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
@@ -505,12 +521,12 @@ impl StructBuilder {
                     name: name.clone(),
                     field,
                     option: is_option,
-                    mode: ChildMode::Multi,
+                    mode: ChildMode::Multi{ non_empty: *non_empty },
                     unwrap: attrs.unwrap.clone(),
                     default: attrs.default.clone(),
                 });
             }
-            Some(FieldMode::Children { name: None }) => {
+            Some(FieldMode::Children(Children { name: None, non_empty })) => {
                 attrs.no_decode("children");
                 if let Some(prev) = &self.var_children {
                     return Err(err_pair(&field, &prev.field,
@@ -519,6 +535,7 @@ impl StructBuilder {
                 }
                 self.var_children = Some(VarChildren {
                     field,
+                    non_empty: *non_empty,
                     unwrap: attrs.unwrap.clone(),
                 });
             }
@@ -826,21 +843,23 @@ impl Attr {
             Ok(Attr::FieldMode(FieldMode::Properties))
         } else if lookahead.peek(kw::children) {
             let _kw: kw::children = input.parse()?;
-            let mut name = None;
+            let mut children = Children {
+                name: None,
+                non_empty: false,
+            };
             if !input.is_empty() && !input.lookahead1().peek(syn::Token![,]) {
                 let parens;
                 syn::parenthesized!(parens in input);
-                let lookahead = parens.lookahead1();
-                if lookahead.peek(kw::name) {
-                    let _kw: kw::name = parens.parse()?;
-                    let _eq: syn::Token![=] = parens.parse()?;
-                    let name_lit: syn::LitStr = parens.parse()?;
-                    name = Some(name_lit.value());
-                } else {
-                    return Err(lookahead.error())
+                let items = Punctuated::<ChildrenItem, syn::Token![,]>::
+                    parse_terminated(&parens)?;
+                for item in items {
+                    match item {
+                        ChildrenItem::Name(name) => children.name = Some(name),
+                        ChildrenItem::NonEmpty => children.non_empty = true,
+                    }
                 }
             }
-            Ok(Attr::FieldMode(FieldMode::Children { name }))
+            Ok(Attr::FieldMode(FieldMode::Children(children)))
         } else if lookahead.peek(kw::child) {
             let _kw: kw::child = input.parse()?;
             Ok(Attr::FieldMode(FieldMode::Child))
@@ -901,6 +920,23 @@ impl Attr {
             let _eq: syn::Token![=] = input.parse()?;
             let ty: syn::Type = input.parse()?;
             Ok(Attr::SpanType(ty))
+        } else {
+            Err(lookahead.error())
+        }
+    }
+}
+
+impl Parse for ChildrenItem {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(kw::name) {
+            let _kw: kw::name = input.parse()?;
+            let _eq: syn::Token![=] = input.parse()?;
+            let name_lit: syn::LitStr = input.parse()?;
+            Ok(ChildrenItem::Name(name_lit.value()))
+        } else if lookahead.peek(kw::non_empty) {
+            let _kw: kw::non_empty = input.parse()?;
+            Ok(ChildrenItem::NonEmpty)
         } else {
             Err(lookahead.error())
         }

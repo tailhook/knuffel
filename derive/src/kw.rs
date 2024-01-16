@@ -6,6 +6,7 @@ syn::custom_keyword!(children);
 syn::custom_keyword!(default);
 syn::custom_keyword!(flatten);
 syn::custom_keyword!(name);
+syn::custom_keyword!(non_empty);
 syn::custom_keyword!(node_name);
 syn::custom_keyword!(properties);
 syn::custom_keyword!(property);
