@@ -117,14 +117,14 @@ pub enum DecodeError<S: ErrorSpan> {
     /// 1. Integer value out of range
     /// 2. `FromStr` returned error for the value parse by
     ///    `#[knuffel(.., str)]`
-    #[error("{}", source)]
+    #[error("{}", error)]
     #[diagnostic()]
     Conversion {
         /// Position of the scalar that could not be converted
         #[label("invalid value")]
         span: S,
         /// Original error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        error: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
     /// Unsupported value
     ///
@@ -395,7 +395,7 @@ impl<S: ErrorSpan> DecodeError<S> {
     {
         DecodeError::Conversion {
             span: span.span().clone(),
-            source: err.into(),
+            error: err.into(),
         }
     }
     /// Construct [`DecodeError::ScalarKind`] error
@@ -450,8 +450,8 @@ impl<S: ErrorSpan> DecodeError<S> {
             => MissingNode { message },
             Unexpected { span, kind, message }
             => Unexpected { span: f(span), kind, message},
-            Conversion { span, source }
-            => Conversion { span: f(span), source },
+            Conversion { span, error }
+            => Conversion { span: f(span), error },
             Unsupported { span, message }
             => Unsupported { span: f(span), message },
             Custom(e) => Custom(e),
