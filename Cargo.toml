@@ -25,11 +25,11 @@ knuffel-derive = {path="./derive", version= "^3.2.0", optional=true}
 base64 = {version="0.21.0", optional=true}
 unicode-width = {version="0.1.9", optional=true}
 minicbor = {version="0.19.1", optional=true, features=["std", "derive"]}
-miette = "5.1.1"
+miette = "6.0.1"
 thiserror = "1.0.31"
 
 [dev-dependencies]
-miette = { version="5.1.1", features=["fancy"] }
+miette = { version="6.0.1", features=["fancy"] }
 assert-json-diff = "2.0.1"
 serde_json = "1.0"
 
