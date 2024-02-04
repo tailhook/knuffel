@@ -23,4 +23,4 @@ proc-macro-error = "1.0.4"
 
 [dev-dependencies]
 knuffel = { path=".." }
-miette = { version="5.1.1", features=["fancy"] }
+miette = { version="6.0.1", features=["fancy"] }
